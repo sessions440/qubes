@@ -36,8 +36,7 @@ ln -s ~/.local/tree-pkg/usr/bin/tree ~/.local/bin/tree
 This unpacks the package contents without registering it in `dpkg`'s database and without
 touching anything outside `$HOME`. Verified working: `tree --version`.
 
-**Caveat:** this approach is fine for simple utilities like `tree` whose dependencies are
-already satisfied by the base image. It's not a general substitute for `apt install` —
+**Caveat:** this approach sacrifices automatic updates for `tree` -- updates are manual-only. That's fine for simple utilities like `tree` with no network exposure, no real attack surface of any kind, and whose dependencies are already satisfied by the base image. It's not a general substitute for `apt install` —
 packages with agent/daemon/socket integration (e.g. `gnupg2` itself) are much more fragile
 extracted this way, which is part of why we're glad `git`/`gnupg2` didn't need this treatment.
 
