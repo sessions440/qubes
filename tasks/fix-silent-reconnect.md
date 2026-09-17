@@ -18,9 +18,8 @@ Two related NetworkManager (NM) issues on `sys-vpn-id0-proton`:
    from being active at once (they're different devices, not competing
    for one slot). Two simultaneously-active default-route tunnels
    produces total connectivity loss. This can happen via the Qubes
-   network widget, `nmcli`, or (in a future GUI-app setup) any other NM
-   frontend — the fix must live at the NM layer, not depend on the user
-   remembering to use one specific tool.
+   network widget, `nmcli`, or any other NM frontend — the fix must live
+   at the NM layer, not depend on remembering to use one specific tool.
 
 **Verify real names before proceeding.** Docs elsewhere in this repo have
 been manually updated to real deployed names, but some may have been
@@ -33,27 +32,40 @@ Target qube: `sys-vpn-id0-proton`, template `debian-13-minimal-net`
 (`debian-13-minimal`-derived). Real connection names confirmed on this
 host: `qubes-CA-1040`, `qubes-CA-1048`, `qubes-US-MI-19`.
 
+## Role tags
+
+Every command below is tagged:
+- **[Human/dom0]** — requires dom0 privilege (`qvm-*` commands, or opening
+  a shell inside a TemplateVM). An agent operating over SSH inside a qube
+  has no path to run these — they need a human at a dom0 terminal.
+- **[Agent/SSH]** — runs inside an already-reachable, already-running qube
+  over SSH. Safe for an agent to execute once network + SSH access to
+  that qube is established.
+
 ## Part A — Disable autoconnect
 
-1. **Inventory current state.** Run and record the output:
+1. **[Agent/SSH]** Inventory current state. Run and record the output:
    ```bash
    nmcli -f NAME,TYPE,DEVICE,AUTOCONNECT,AUTOCONNECT-PRIORITY connection show
    ```
    Confirm all three connections above are present; note which (if any)
    currently show `AUTOCONNECT: yes`.
 
-2. **Disable autoconnect on all three** — the default connection included.
-   Going forward, connection state changes should only happen explicitly
-   (via `nmcli`, the dispatcher script in Part B, or the boot-time
-   `rc.local` line), never via NM's own autoconnect logic:
+2. **[Agent/SSH]** Disable autoconnect on all three — the default
+   connection included. Going forward, connection state changes should
+   only happen explicitly (via `nmcli`, the dispatcher script in Part B,
+   or the boot-time `rc.local` line), never via NM's own autoconnect
+   logic:
    ```bash
    sudo nmcli connection modify qubes-CA-1040 connection.autoconnect no
    sudo nmcli connection modify qubes-CA-1048 connection.autoconnect no
    sudo nmcli connection modify qubes-US-MI-19 connection.autoconnect no
    ```
 
-3. **Inspect `/rw/config/rc.local`** (not `$HOME` — that location has no
-   relevance to boot-time bring-up):
+3. **[Agent/SSH]** Inspect `/rw/config/rc.local` (not `$HOME` — that
+   location has no relevance to boot-time bring-up; this path is
+   per-AppVM persistent storage, editable directly over SSH, no dom0
+   needed):
    ```bash
    cat /rw/config/rc.local
    ```
@@ -61,8 +73,8 @@ host: `qubes-CA-1040`, `qubes-CA-1048`, `qubes-US-MI-19`.
    of the three real connection names above. Fix it if it references a
    stale placeholder.
 
-4. **Verify the kill switch wildcard in the same file matches reality.**
-   Check what NM actually names the interfaces:
+4. **[Agent/SSH]** Verify the kill switch wildcard in the same file
+   matches reality. Check what NM actually names the interfaces:
    ```bash
    nmcli -f NAME,DEVICE connection show
    ```
@@ -70,7 +82,8 @@ host: `qubes-CA-1040`, `qubes-CA-1048`, `qubes-US-MI-19`.
    `"proton*"`, it will **not** match interfaces named `qubes-CA-1040`
    etc. — meaning the kill switch silently fails to enforce fail-closed
    behavior. Update the pattern (e.g. to `"qubes-*"`, or list all three
-   names explicitly) so it actually matches.
+   names explicitly) so it actually matches. This edit is also a direct
+   file edit under `/rw/config/rc.local` — no dom0 needed.
 
 ## Part B — Exclusive-activation dispatcher script
 
@@ -83,18 +96,23 @@ different connection via the Qubes network widget, `nmcli`, or any other
 frontend — correct by construction, rather than requiring a separate
 CLI habit to remember.
 
-**This must be added to the template (`debian-13-minimal-net`), not the running
-`sys-vpn-id0-proton` AppVM** — `/etc` is part of the ephemeral per-boot overlay in an
-AppVM and reverts to whatever the template provides; changes need to be
-baked into the template image to persist.
+**This must be added to the template (`debian-13-minimal-net`), not the
+running `sys-vpn-id0-proton` AppVM** — `/etc` is part of the ephemeral
+per-boot overlay in an AppVM and reverts to whatever the template
+provides; changes need to be baked into the template image to persist.
 
-1. Shut down `sys-vpn-id0-proton`, then open a root shell in the template:
+Editing a template requires a dom0 session — there is no SSH-reachable
+path into the template for this step. A human runs this part.
+
+1. **[Human/dom0]** Shut down `sys-vpn-id0-proton`, then open a root
+   shell in the template:
    ```bash
    qvm-shutdown sys-vpn-id0-proton
    qvm-run -u root debian-13-minimal-net xterm
    ```
 
-2. Create the dispatcher script:
+2. **[Human/dom0]**, typed inside that root shell — create the
+   dispatcher script:
    ```bash
    cat > /etc/NetworkManager/dispatcher.d/90-exclusive-vpn.sh << 'EOF'
    #!/bin/bash
@@ -117,14 +135,15 @@ baked into the template image to persist.
    EOF
    ```
 
-3. **Permissions matter — NM silently refuses to run scripts that don't
-   meet these:**
+3. **[Human/dom0]**, same shell — permissions matter, NM silently
+   refuses to run scripts that don't meet these:
    ```bash
    chown root:root /etc/NetworkManager/dispatcher.d/90-exclusive-vpn.sh
    chmod 750 /etc/NetworkManager/dispatcher.d/90-exclusive-vpn.sh
    ```
 
-4. Shut down the template and restart `sys-vpn-id0-proton` to inherit the change:
+4. **[Human/dom0]** Shut down the template and restart
+   `sys-vpn-id0-proton` to inherit the change:
    ```bash
    qvm-shutdown debian-13-minimal-net
    qvm-start sys-vpn-id0-proton
@@ -132,8 +151,11 @@ baked into the template image to persist.
 
 ## Verification
 
-1. **Autoconnect check:** after a reboot of `sys-vpn-id0-proton`, confirm exactly one
-   WireGuard connection is active and it's the intended default:
+Once `sys-vpn-id0-proton` is back up and SSH-reachable, these are all
+**[Agent/SSH]** except where noted:
+
+1. **Autoconnect check:** confirm exactly one WireGuard connection is
+   active and it's the intended default:
    ```bash
    nmcli connection show --active
    ```
@@ -147,14 +169,14 @@ baked into the template image to persist.
    sudo journalctl -u NetworkManager | grep -i dispatcher
    ```
 
-3. **Downstream connectivity:** from a downstream AppVM,
+3. **Downstream connectivity** — requires access to a downstream AppVM,
+   which the agent may or may not have; do via **[Human]** if not:
    `curl https://ifconfig.me` should show the VPN IP.
 
-4. **Kill switch check:** bring the active tunnel down from `sys-vpn-id0-proton`
+4. **Kill switch check** (**[Agent/SSH]** on `sys-vpn-id0-proton`, plus
+   the same downstream check as #3): bring the active tunnel down
    (`sudo nmcli connection down <name>`) and confirm downstream
-   connectivity fails outright — not falling back to clearnet. This
-   confirms the kill switch fires correctly with the corrected
-   interface-name pattern from Part A, Step 4.
+   connectivity fails outright — not falling back to clearnet.
 
 5. **No silent reactivation:** leave the qube idle for several minutes
    with no connection active and confirm nothing comes back up on its
@@ -175,6 +197,6 @@ baked into the template image to persist.
 - Rely on NM's own autoconnect logic to bring up the default connection —
   the explicit line in `rc.local` is the only intended activation path at
   boot.
-- Add the dispatcher script directly to the running `sys-vpn-id0-proton` AppVM's
-  `/etc` — it will be silently lost on the next reboot. It belongs in the
-  template.
+- Add the dispatcher script directly to the running `sys-vpn-id0-proton`
+  AppVM's `/etc` — it will be silently lost on the next reboot. It
+  belongs in the template.
