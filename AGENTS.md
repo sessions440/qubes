@@ -41,6 +41,10 @@ AGENTS.md       — this file
   unambiguously (e.g. `<placeholder>`) rather than a plausible-looking
   fake value.
 
+## [TODO] Architecture / Inventory
+
+List names and explain my use of community templates, custom templates, AppVMs, ProxyVMs.
+
 ## Security guidelines for agents working in this repo
 
 ### The dom0 boundary is absolute
