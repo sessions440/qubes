@@ -85,7 +85,7 @@ instead.
 
 3. **[Human/dom0]**, same shell — install the ProtonVPN Linux app per
    Proton's current official instructions. Verify the package signature
-   before installing.
+   before installing. Skip instructions to enable split tunneling.
 
 4. **[Human/dom0]** Shut down the template:
    ```bash
@@ -103,10 +103,19 @@ instead.
 
    qvm-service sys-vpn-id0-proton-gui network-manager on
    ```
+   If instead you use the dom0 "Create New Qube" GUI, you may add Proton VPN to the applications list now, so it's available in the Qubes menu.
 
-6. **[Human]** Start the qube and open its window. Log into the Proton
+6. **[Human]** Start the qube and log into the Proton
    app interactively — this is credential entry (possibly with 2FA) and
-   should not be scripted or delegated to an agent. This session lives in
+   should not be scripted or delegated to an agent.
+
+   If prompted to choose a password for a new keyring, use an empty password and select "Continue". If you encounter trouble (Proton VPN GUI says "unexpected error occurred") then clear Proton cache and config, and reset the local keyrings directory:
+   ```bash
+   rm -rf ~/.cache/Proton ~/.config/Proton ~/.local/share/keyrings/*
+   ```
+   Then reboot the qube and try again.
+   
+   This session lives in
    `sys-vpn-id0-proton-gui`'s own persistent `$HOME`/keyring, not the
    template — logging in during template customization would bake the
    session into the shared image instead, which is the wrong place for
