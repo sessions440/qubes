@@ -68,13 +68,13 @@ instead.
 1. **[Human/dom0]** Clone a fresh template — not the loaded
    browsing/coding one:
    ```bash
-   qvm-clone debian-13-xfce debian-13-xfce-vpn-gui
+   qvm-clone debian-13-xfce debian-13-xfce-net
    ```
 
 2. **[Human/dom0]** Open a root shell in the new template and install
    base packages:
    ```bash
-   qvm-run -u root debian-13-xfce-vpn-gui xterm
+   qvm-run -u root debian-13-xfce-net xfce4-terminal
    ```
    Inside that shell:
    ```bash
@@ -89,14 +89,14 @@ instead.
 
 4. **[Human/dom0]** Shut down the template:
    ```bash
-   qvm-shutdown debian-13-xfce-vpn-gui
+   qvm-shutdown debian-13-xfce-net
    ```
 
 5. **[Human/dom0]** Create the ProxyVM:
    ```bash
    qvm-create sys-vpn-id0-proton-gui \
      --class AppVM \
-     --template debian-13-xfce-vpn-gui \
+     --template debian-13-xfce-net \
      --label orange \
      --prop provides_network=True \
      --prop netvm=sys-firewall
