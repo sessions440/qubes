@@ -17,7 +17,7 @@ Two related NetworkManager (NM) issues on `sys-vpn-id0-proton`:
    `AllowedIPs = 0.0.0.0/0`, so NM has no built-in reason to prevent two
    from being active at once (they're different devices, not competing
    for one slot). Two simultaneously-active default-route tunnels
-   produces total connectivity loss. This can happen via the Qubes
+   produce total connectivity loss. This can happen via the Qubes
    network widget, `nmcli`, or any other NM frontend — the fix must live
    at the NM layer, not depend on remembering to use one specific tool.
 
@@ -26,64 +26,95 @@ been manually updated to real deployed names, but some may have been
 missed — do not assume any name below (or any interface/connection name
 referenced in other repo docs) is still a placeholder from an earlier
 draft unless you've checked it against the live system with the commands
-in Step 1.
+in Part A, step 1.
 
-Target qube: `sys-vpn-id0-proton`, template `debian-13-minimal-net`
-(`debian-13-minimal`-derived). Real connection names confirmed on this
-host: `qubes-CA-1040`, `qubes-CA-1048`, `qubes-US-MI-19`.
+Target qube: `sys-vpn-id0-proton`, template `debian-13-minimal-net` (`debian-13-minimal`-derived).
+Real connection names confirmed on this host: `qubes-CA-1040`,
+`qubes-CA-1048`, `qubes-US-MI-19`.
+
+## Prerequisites and privileges
+
+- SSH access from the agent qube to `sys-vpn-id0-proton`, set up per
+  `agent-ssh-access.md`.
+- **The agent has `user` only, no root.** `debian-13-minimal-net` does not
+  ship passwordless `sudo` (by design), so `sudo ...` fails in this qube.
+  Everything that needs root is run by a human from dom0 with
+  `qvm-run -u root sys-vpn-id0-proton '<command>'`.
+- Files executed as root at boot (`/rw/config/rc.local`, dispatcher
+  scripts) are root-equivalent. The agent **drafts** them; a human reviews
+  and installs them. The agent never writes them in place.
 
 ## Role tags
 
-Every command below is tagged:
-- **[Human/dom0]** — requires dom0 privilege (`qvm-*` commands, or opening
-  a shell inside a TemplateVM). An agent operating over SSH inside a qube
-  has no path to run these — they need a human at a dom0 terminal.
-- **[Agent/SSH]** — runs inside an already-reachable, already-running qube
-  over SSH. Safe for an agent to execute once network + SSH access to
-  that qube is established.
+- **[Human/dom0]** — requires dom0 privilege, root inside the qube via
+  `qvm-run -u root`, or a shell inside the TemplateVM.
+- **[Agent/SSH]** — runs as `user` over SSH. Read-only checks and drafting
+  only.
+- **[Human]** — interactive step or review that should not be delegated.
 
 ## Part A — Disable autoconnect
 
-1. **[Agent/SSH]** Inventory current state. Run and record the output:
+1. **[Agent/SSH]** Inventory current state (read-only). Record the output:
    ```bash
    nmcli -f NAME,TYPE,DEVICE,AUTOCONNECT,AUTOCONNECT-PRIORITY connection show
    ```
-   Confirm all three connections above are present; note which (if any)
-   currently show `AUTOCONNECT: yes`.
+   Confirm all three connections above are present; note which currently
+   show `AUTOCONNECT: yes`.
 
-2. **[Agent/SSH]** Disable autoconnect on all three — the default
-   connection included. Going forward, connection state changes should
-   only happen explicitly (via `nmcli`, the dispatcher script in Part B,
-   or the boot-time `rc.local` line), never via NM's own autoconnect
-   logic:
-   ```bash
-   sudo nmcli connection modify qubes-CA-1040 connection.autoconnect no
-   sudo nmcli connection modify qubes-CA-1048 connection.autoconnect no
-   sudo nmcli connection modify qubes-US-MI-19 connection.autoconnect no
-   ```
-
-3. **[Agent/SSH]** Inspect `/rw/config/rc.local` (not `$HOME` — that
-   location has no relevance to boot-time bring-up; this path is
-   per-AppVM persistent storage, editable directly over SSH, no dom0
-   needed):
+2. **[Agent/SSH]** Read the current boot script and the interface names
+   (read-only):
    ```bash
    cat /rw/config/rc.local
-   ```
-   Confirm the explicit `nmcli connection up <name>` line references one
-   of the three real connection names above. Fix it if it references a
-   stale placeholder.
-
-4. **[Agent/SSH]** Verify the kill switch wildcard in the same file
-   matches reality. Check what NM actually names the interfaces:
-   ```bash
    nmcli -f NAME,DEVICE connection show
    ```
-   If the existing nftables rule in `rc.local` uses a pattern like
-   `"proton*"`, it will **not** match interfaces named `qubes-CA-1040`
-   etc. — meaning the kill switch silently fails to enforce fail-closed
-   behavior. Update the pattern (e.g. to `"qubes-*"`, or list all three
-   names explicitly) so it actually matches. This edit is also a direct
-   file edit under `/rw/config/rc.local` — no dom0 needed.
+   Check that the `nmcli connection up <name>` line names one of the three
+   real connections, and that the kill-switch `oifname` pattern matches
+   the real interface names. A pattern like `"proton*"` does **not** match
+   `qubes-CA-1040` etc., which would mean the kill switch silently fails
+   open. Expected fix: `"qubes*"` (or list all three names).
+
+3. **[Agent/SSH]** Draft the corrected file as
+   `~/rc.local.proposed` (same content as the current file with only the
+   fixes from step 2). Do not touch `/rw/config/rc.local`. Produce a
+   unified diff against it:
+   ```bash
+   diff -u /rw/config/rc.local ~/rc.local.proposed
+   ```
+
+4. **[Human]** Review the diff. It will run as root at every boot.
+
+5. **[Human/dom0]** Back up, then install the reviewed file:
+   ```bash
+   qvm-run -u root sys-vpn-id0-proton 'cp -a /rw/config/rc.local /rw/config/rc.local.bak'
+   qvm-run -u root sys-vpn-id0-proton 'install -m 0755 -o root -g root /home/user/rc.local.proposed /rw/config/rc.local'
+   ```
+
+6. **[Human/dom0]** Disable autoconnect on all three — the default
+   included. From here on, connection state changes happen only
+   explicitly (`nmcli`, the dispatcher script in Part B, or the boot-time
+   line in `rc.local`), never via NM's own autoconnect logic:
+   ```bash
+   qvm-run -u root sys-vpn-id0-proton 'nmcli connection modify qubes-CA-1040 connection.autoconnect no'
+   qvm-run -u root sys-vpn-id0-proton 'nmcli connection modify qubes-CA-1048 connection.autoconnect no'
+   qvm-run -u root sys-vpn-id0-proton 'nmcli connection modify qubes-US-MI-19 connection.autoconnect no'
+   ```
+
+### Open risk: boot ordering
+
+`rc.local` can run **before NetworkManager is ready** (a known gotcha on
+minimal Debian templates), in which case `nmcli connection up ...` in
+`rc.local` silently fails. If so, the VPN has so far been coming up at
+boot because of **autoconnect**, not because of `rc.local` — and step 6
+would remove that. The kill switch keeps this fail-closed (no leak), but
+downstream qubes would have no connectivity after boot.
+
+**Test before calling Part A done:** restart `sys-vpn-id0-proton` and
+check `nmcli connection show --active`. If no WireGuard connection is
+active, `rc.local` is losing the race. Candidate fixes (human decision,
+not yet tried): wait for NM in a backgrounded line, e.g.
+`( nm-online -q -t 60 && nmcli connection up qubes-CA-1040 ) &`, or bring
+the default connection up from a dispatcher script on the uplink's `up`
+event. Do **not** re-enable autoconnect as the workaround.
 
 ## Part B — Exclusive-activation dispatcher script
 
@@ -93,16 +124,14 @@ dispatcher script that fires on the generic `up` event for any interface
 generic per-interface events are the correct hook) and brings down any
 other `qubes-*` connection. This makes the *naive* action — picking a
 different connection via the Qubes network widget, `nmcli`, or any other
-frontend — correct by construction, rather than requiring a separate
-CLI habit to remember.
+frontend — correct by construction.
 
 **This must be added to the template (`debian-13-minimal-net`), not the
 running `sys-vpn-id0-proton` AppVM** — `/etc` is part of the ephemeral
 per-boot overlay in an AppVM and reverts to whatever the template
-provides; changes need to be baked into the template image to persist.
-
-Editing a template requires a dom0 session — there is no SSH-reachable
-path into the template for this step. A human runs this part.
+provides. Editing a template requires dom0; a human runs this part.
+Note that `debian-13-minimal-net` also backs `lan-proxy`; the script only
+acts on interfaces named `qubes-*`, so it is inert there.
 
 1. **[Human/dom0]** Shut down `sys-vpn-id0-proton`, then open a root
    shell in the template:
@@ -111,8 +140,8 @@ path into the template for this step. A human runs this part.
    qvm-run -u root debian-13-minimal-net xterm
    ```
 
-2. **[Human/dom0]**, typed inside that root shell — create the
-   dispatcher script:
+2. **[Human/dom0]**, typed in that root shell — create the dispatcher
+   script:
    ```bash
    cat > /etc/NetworkManager/dispatcher.d/90-exclusive-vpn.sh << 'EOF'
    #!/bin/bash
@@ -135,8 +164,8 @@ path into the template for this step. A human runs this part.
    EOF
    ```
 
-3. **[Human/dom0]**, same shell — permissions matter, NM silently
-   refuses to run scripts that don't meet these:
+3. **[Human/dom0]**, same shell — NM silently refuses to run scripts that
+   don't meet these:
    ```bash
    chown root:root /etc/NetworkManager/dispatcher.d/90-exclusive-vpn.sh
    chmod 750 /etc/NetworkManager/dispatcher.d/90-exclusive-vpn.sh
@@ -148,55 +177,66 @@ path into the template for this step. A human runs this part.
    qvm-shutdown debian-13-minimal-net
    qvm-start sys-vpn-id0-proton
    ```
+   The agent's SSH session drops at the shutdown; reconnect after the
+   restart.
 
 ## Verification
 
-Once `sys-vpn-id0-proton` is back up and SSH-reachable, these are all
-**[Agent/SSH]** except where noted:
+Once `sys-vpn-id0-proton` is back up and SSH-reachable:
 
-1. **Autoconnect check:** confirm exactly one WireGuard connection is
-   active and it's the intended default:
+1. **[Agent/SSH]** Autoconnect and boot state: exactly one WireGuard
+   connection is active and it is the intended default:
    ```bash
+   nmcli -f NAME,AUTOCONNECT connection show
    nmcli connection show --active
    ```
 
-2. **Exclusivity check:** manually bring up a second `qubes-*` connection
-   while the first is active (`nmcli connection up qubes-CA-1048` while
-   `qubes-CA-1040` is up) and confirm the dispatcher script brings the
-   first one down automatically — check `nmcli connection show --active`
-   immediately after, and check dispatcher logs if it doesn't:
+2. **[Human/dom0]** Exclusivity: with the default active, bring up a
+   second one and confirm the first goes down automatically:
    ```bash
-   sudo journalctl -u NetworkManager | grep -i dispatcher
+   qvm-run -u root sys-vpn-id0-proton 'nmcli connection up qubes-CA-1048'
    ```
+   then **[Agent/SSH]** `nmcli connection show --active` should list only
+   `qubes-CA-1048`. If not, **[Human/dom0]**
+   `qvm-run -u root sys-vpn-id0-proton 'journalctl -u NetworkManager | grep -i dispatcher'`.
+   Also try switching through the Qubes network widget, since that is the
+   path the fix exists for.
 
-3. **Downstream connectivity** — requires access to a downstream AppVM,
-   which the agent may or may not have; do via **[Human]** if not:
-   `curl https://ifconfig.me` should show the VPN IP.
+3. **[Human]** Downstream connectivity: from a downstream AppVM,
+   `curl https://ifconfig.me` shows the VPN IP.
 
-4. **Kill switch check** (**[Agent/SSH]** on `sys-vpn-id0-proton`, plus
-   the same downstream check as #3): bring the active tunnel down
-   (`sudo nmcli connection down <name>`) and confirm downstream
-   connectivity fails outright — not falling back to clearnet.
+4. **[Human/dom0] + [Human]** Kill switch: bring the active tunnel down
+   (`qvm-run -u root sys-vpn-id0-proton 'nmcli connection down <name>'`)
+   and confirm downstream connectivity fails outright rather than falling
+   back to clearnet.
 
-5. **No silent reactivation:** leave the qube idle for several minutes
-   with no connection active and confirm nothing comes back up on its
-   own.
+5. **[Agent/SSH]** No silent reactivation: with no connection active,
+   leave the qube idle for several minutes and confirm nothing comes back
+   up (`nmcli connection show --active`).
 
 ## Report back
 
 - Final `AUTOCONNECT` state of all three connections.
-- Final content of `/rw/config/rc.local`, including the corrected kill
-  switch pattern.
-- Confirmation the dispatcher script is in place with correct ownership
-  and permissions.
-- Results of all five verification checks above.
+- The diff applied to `/rw/config/rc.local`, and the final kill-switch
+  pattern.
+- Whether a WireGuard connection is active after a fresh boot (the
+  boot-ordering test).
+- Confirmation the dispatcher script is in place with `root:root` and
+  mode `750`.
+- Results of all five verification checks.
 
 ## Do not
 
 - Re-enable `connection.autoconnect` on any of the three connections.
-- Rely on NM's own autoconnect logic to bring up the default connection —
-  the explicit line in `rc.local` is the only intended activation path at
-  boot.
-- Add the dispatcher script directly to the running `sys-vpn-id0-proton`
-  AppVM's `/etc` — it will be silently lost on the next reboot. It
-  belongs in the template.
+- Rely on NM's own autoconnect logic to bring up the default connection.
+- Write `/rw/config/rc.local` (or any file run as root at boot) directly
+  as the agent.
+- Weaken the kill switch (for example `policy drop` → `policy accept`) to
+  get past an error; flag it for a human decision.
+- Add the dispatcher script to the running AppVM's `/etc`; it is lost on
+  reboot. It belongs in the template.
+
+## Status
+
+Design proposed, not yet implemented. The dispatcher approach rests on
+NM's generic dispatcher events; it has not yet been run on this system.
