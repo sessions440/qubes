@@ -10,6 +10,13 @@ applied elsewhere in this environment (see `pass-install.md`,
 
 Chain: `AppVM → sys-vpn-id0-proton → sys-firewall → sys-net`
 
+**Privileges:** `debian-13-minimal-net` has no passwordless `sudo` (by
+design), so the `sudo ...` commands in this doc fail inside
+`sys-vpn-id0-proton`. Run them as root from dom0 instead
+(`qvm-run -u root sys-vpn-id0-proton '<command>'`, or an interactive
+root shell via `qvm-run -u root sys-vpn-id0-proton xterm`). An agent
+with SSH access has `user` only; see `agent-ssh-access.md`.
+
 Rejected alternative: Proton's official Linux CLI. It depends on
 `gnome-keyring` / a D-Bus session bus, which never exists in an
 auto-started, loginless ProxyVM — it's effectively a headless environment
@@ -220,6 +227,15 @@ fail-closed behavior, not a bug.
   servers breaks connectivity even with a healthy tunnel.
 - `provides_network=True` does not give `sys-vpn-id0-proton` its own uplink — `netvm`
   must be set explicitly (`sys-firewall`), or the qube has no network.
+
+## Forward references
+
+- `fix-silent-reconnect.md` — NM autoconnect and multi-connection
+  conflict fix for this qube (exclusivity dispatcher script).
+- `agent-ssh-access.md` — SSH access for a coding agent to administer
+  this qube, including the inbound-firewall rule that enables it.
+- `vpn-proxyvm-gui.md` — separate, on-demand GUI ProxyVM for one-off
+  country routing.
 
 ## Status
 

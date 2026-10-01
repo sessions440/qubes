@@ -11,6 +11,7 @@ and write docs here, and in some cases are given SSH access to actually execute 
 doc/
   network/      — ProxyVM/NetVM design and deployment docs
   apps/         — app install docs: user-space vs. template, etc.
+  agents/       — coding-agent access to qubes (SSH setup, root policy)
 tasks/          — specific but unfinished tasks: fixes, buildouts, etc.
 non-qubes-misc/ — miscellaneous learnings, not necessarily Qubes-related
 AGENTS.md       — this file
@@ -28,8 +29,9 @@ AGENTS.md       — this file
   doc's confident tone imply verification that hasn't happened.
 - **Role-tag every executable step.** Any doc containing commands meant to
   be run should tag each one:
-  - `[Human/dom0]` — requires dom0 privilege, or a shell opened inside a
-    TemplateVM. There is no SSH-based path for an agent to run these.
+  - `[Human/dom0]` — requires dom0 privilege, root inside a qube via
+    `qvm-run -u root`, or a shell opened inside a TemplateVM. There is no
+    SSH-based path for an agent to run these.
   - `[Agent/SSH]` — runs inside an already-reachable, already-running
     qube.
   - `[Human]` — requires interactive input (credentials, GUI
@@ -95,6 +97,21 @@ scoped to that qube and the task at hand. It shouldn't copy files between
 qubes, reach into another qube's private data (password stores, browser
 profiles, other credentials), or push data outside the qube it was given
 access to, unless the task explicitly calls for it.
+
+### No root for agents by default
+
+Agents get `user` over SSH, not root. Minimal templates ship without
+passwordless sudo by design, and that stays. Root-level steps are
+`[Human/dom0]` via `qvm-run -u root <qube> '<command>'`; the agent drafts
+the exact command or file, and a human reviews and runs it. Files
+executed as root at boot (`/rw/config/rc.local`,
+`/rw/config/qubes-firewall-user-script`, NetworkManager dispatcher
+scripts) are root-equivalent, so an agent never writes them in place: it
+proposes, a human installs. Full templates such as `debian-13-xfce` have
+passwordless sudo by default, so an agent SSH login to a qube on one is
+root-equivalent in that qube; don't point an agent at qubes holding
+credentials it shouldn't have. Setup and rationale:
+`doc/agents/agent-ssh-access.md`.
 
 ### Confirm before anything destructive or irreversible
 
