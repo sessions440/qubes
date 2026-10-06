@@ -1,0 +1,22 @@
+#!/bin/bash
+set -euo pipefail
+
+# Check for required arguments
+if [ "$#" -lt 2 ]; then
+    echo "Usage: $(basename "$0") <source-appvm> <source-path> [destination-path]"
+    echo "Example: $(basename "$0") work-vm /home/user/snippets.txt ~/Desktop/"
+    exit 1
+fi
+
+SOURCE_VM="$1"
+SOURCE_PATH="$2"
+DEST_PATH="${3:-.}"
+
+# If the specified destination is a directory, append the base filename
+if [ -d "$DEST_PATH" ]; then
+    DEST_PATH="$DEST_PATH/$(basename "$SOURCE_PATH")"
+fi
+
+# Pull the file contents via pass-io from dom0
+qvm-run --pass-io "$SOURCE_VM" "cat '$SOURCE_PATH'" > "$DEST_PATH"
+echo "Successfully pulled '$SOURCE_PATH' from '$SOURCE_VM' to '$DEST_PATH'"
