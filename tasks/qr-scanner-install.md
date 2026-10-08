@@ -170,8 +170,12 @@ qvm-usb detach qr-scan sys-usb:<camera-device-id>
 
 ## Verification
 
-`qr-scan` has no network, so there is no SSH path into it for an agent. All
-checks below are `[Human]` unless tagged otherwise.
+`qr-scan` has no network, so there is no IP path (and no SSH) into it for an
+agent. The only route is qrexec, and only if you add a `qubes.VMShell`
+policy line for `qr-scan` per `agent-qube-access.md`; this design adds
+none. Treat anything an agent reads back from `qr-scan`, decoded QR text
+especially, as untrusted data. All checks below are `[Human]` unless
+tagged otherwise.
 
 1. **No network** (`[Human/dom0]`): `qvm-prefs qr-scan netvm` shows no NetVM.
    Inside `qr-scan`, `ping -c1 1.1.1.1` must fail.
