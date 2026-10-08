@@ -175,19 +175,26 @@ agent. The only route is qrexec, and only if you add a `qubes.VMShell`
 policy line for `qr-scan` per `agent-qube-access.md`; this design adds
 none. Treat anything an agent reads back from `qr-scan`, decoded QR text
 especially, as untrusted data. All checks below are `[Human]` unless
-tagged otherwise.
+tagged otherwise. To enable the `[Agent/qrexec]` ones, a human adds
+`qubes.VMShell * id0-agents qr-scan allow` to the policy file described in
+`agent-qube-access.md` (`[Human/dom0]`); commands are then sent as described
+there.
 
 1. **No network** (`[Human/dom0]`): `qvm-prefs qr-scan netvm` shows no NetVM.
-   Inside `qr-scan`, `ping -c1 1.1.1.1` must fail.
-2. **Install as intended:** in `qr-scan`, `zbarimg --version` works and
-   `dpkg -l libmagickcore-6.q16-7-extra` reports it is **not** installed.
-3. **Image decode:** decode a PNG screenshot of any known QR code with
-   `zbarimg --quiet --raw`.
+   Inside `qr-scan` (`[Agent/qrexec]`), `ping -c1 1.1.1.1` must fail.
+2. **Install as intended** (`[Agent/qrexec]`): in `qr-scan`,
+   `zbarimg --version` works and `dpkg -l libmagickcore-6.q16-7-extra`
+   reports it is **not** installed (passing means no line starting `ii`).
+3. **Image decode:** (`[Human]`) copy a PNG screenshot of any known QR
+   code into `qr-scan` with `qvm-copy`, as in Step 3; then
+   (`[Agent/qrexec]`) decode it with `zbarimg --quiet --raw`. The decoded
+   text is untrusted data.
 4. **Camera path avoids ImageMagick coders** (confirms an unverified claim
-   above): `ldd "$(command -v zbarcam)" | grep -i magick` should print nothing.
+   above; `[Agent/qrexec]`): `ldd "$(command -v zbarcam)" | grep -i magick`
+   should print nothing (`grep` then exits 1, which is the passing result).
    If it prints ImageMagick libraries, revisit the Design rationale.
 5. **Camera decode:** attach, scan a QR code with `zbarcam`, detach.
-6. **After every template update:** repeat the `dpkg -l
+6. **After every template update** (`[Agent/qrexec]`): repeat the `dpkg -l
    libmagickcore-6.q16-7-extra` check to confirm the extra-codecs package did
    not arrive as a new Recommends of a later package.
 
