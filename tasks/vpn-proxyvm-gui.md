@@ -36,9 +36,10 @@ Chain: `AppVM → sys-vpn-id0-proton-gui → sys-firewall → sys-net`
 
 Same convention as `fix-silent-reconnect.md`:
 - **[Human/dom0]** — requires dom0 privilege, root inside a qube via
-  `qvm-run -u root`, or a shell opened inside a TemplateVM. No SSH-based
-  path for an agent to run these.
-- **[Agent/SSH]** — runs inside an already-running, SSH-reachable qube.
+  `qvm-run -u root`, or a shell opened inside a TemplateVM. No agent path to dom0 or a TemplateVM.
+- **[Agent/qrexec]** — runs as `user` from the agent qube through
+  `qrexec-client-vm`, in an already-running qube that a dom0 policy line
+  allows.
 - **[Human]** — requires interactive input (credentials, GUI clicks) that
   should not be delegated to an agent regardless of access level.
 
@@ -61,8 +62,9 @@ instead.
   instructions at setup time — packaging has changed before and may
   again; verify the package signature/checksum against Proton's
   published values rather than trusting a raw download.
-- `wireguard-tools` and `openssh-server` (for agent access) should be
-  installed explicitly regardless of what Proton's installer pulls in.
+- `wireguard-tools` should be installed explicitly regardless of what
+  Proton's installer pulls in. `openssh-server` is needed only for the SSH
+  backup path in `agent-qube-access.md`; it is not installed by default.
 
 ## Setup
 
@@ -80,8 +82,7 @@ instead.
    Inside that shell:
    ```bash
    apt update
-   apt install openssh-server wireguard-tools
-   systemctl enable ssh
+   apt install wireguard-tools
    ```
 
 3. **[Human/dom0]**, same shell — install the ProtonVPN Linux app per
@@ -123,21 +124,20 @@ instead.
    it (every AppVM cloned from that template would inherit the same
    session).
 
-7. **[Human, then Agent/SSH once reachable]** Set up agent SSH access per
-   `agent-ssh-access.md`: add the agent's public key to this qube's own
-   `~/.ssh/authorized_keys`, and add the `custom-input` firewall rule that
-   lets the agent qube's address reach port 22 (without it, `ssh` fails
-   with "No route to host"). This qube is on a full template
-   (`debian-13-xfce-net`), which has passwordless `sudo`, so an agent login
-   here is root-equivalent in this qube, and this qube holds Proton's
-   credentials. Decide whether that is acceptable before enabling agent
-   access here at all; administering this qube by hand is a reasonable
-   alternative.
+7. **[Human/dom0, then Agent/qrexec]** Decide whether the agent gets any
+   shell in this qube at all. It is on a full template
+   (`debian-13-xfce-net`), which has passwordless `sudo`, so a
+   `qubes.VMShell` shell as `user` is root-equivalent here, and this qube
+   holds Proton's account credentials. If yes, add a `qubes.VMShell` allow
+   line for it per `agent-qube-access.md`; root-off is moot on this
+   template, so keep the `qubes.VMRootShell` line commented out and treat
+   the VMShell line as the real decision. Administering this qube by hand
+   is a reasonable alternative.
 
 8. **[Human]** Enable Proton's own kill switch in its app settings, if
    available in the installed version.
 
-9. **[Agent/SSH drafts, Human/dom0 installs]** Add a qube-level nftables
+9. **[Agent/qrexec drafts, Human/dom0 installs]** Add a qube-level nftables
    backstop kill switch via `/rw/config/rc.local` (a file that runs as
    root at boot, so the agent proposes it and a human installs it; see
    `AGENTS.md`), following the same fail-closed pattern as

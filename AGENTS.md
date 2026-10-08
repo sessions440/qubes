@@ -3,7 +3,7 @@
 ## Purpose
 
 This repo is the documentation store for a Qubes OS 4.3 learning and customization project — experiment and build my ideal personal workstation. Scope includes ProxyVM/NetVM designs, template customizations, app installs, and fixes for issues encountered along the way. Agents (Claude Code, OpenCode, etc.) read
-and write docs here, and in some cases are given SSH access to actually execute the changes a doc describes against live qubes.
+and write docs here, and in some cases are given shell access (qrexec, or SSH as a backup) to actually execute the changes a doc describes against live qubes.
 
 ## Repo structure
 
@@ -11,7 +11,7 @@ and write docs here, and in some cases are given SSH access to actually execute 
 doc/
   network/      — ProxyVM/NetVM design and deployment docs
   apps/         — app install docs: user-space vs. template, etc.
-  agents/       — coding-agent access to qubes (SSH setup, root policy)
+  agents/       — coding-agent access to qubes (qrexec/SSH setup, root policy)
 tasks/          — specific but unfinished tasks: fixes, buildouts, etc.
 non-qubes-misc/ — miscellaneous learnings, not necessarily Qubes-related
 AGENTS.md       — this file
@@ -31,9 +31,13 @@ AGENTS.md       — this file
   be run should tag each one:
   - `[Human/dom0]` — requires dom0 privilege, root inside a qube via
     `qvm-run -u root`, or a shell opened inside a TemplateVM. There is no
-    SSH-based path for an agent to run these.
-  - `[Agent/SSH]` — runs inside an already-reachable, already-running
-    qube.
+    agent path to dom0 or a TemplateVM, and none to root in a qube unless
+    root has been opted in for that target.
+  - `[Agent/qrexec]` — runs as `user` from the agent qube through
+    `qrexec-client-vm` (`qubes.VMShell`), in an already-running qube that
+    a dom0 policy line allows.
+  - `[Agent/SSH]` — backup path: runs inside an already-reachable,
+    already-running qube over SSH.
   - `[Human]` — requires interactive input (credentials, GUI
     interaction) that shouldn't be delegated regardless of access level.
 - **Verify before trusting.** Placeholder names from earlier drafts have
@@ -92,7 +96,7 @@ injection vector than in a purely conversational context.
 
 ### Least privilege when given qube access
 
-An agent with SSH access to a specific qube (say, a ProxyVM) should stay
+An agent with shell access (qrexec or SSH) to a specific qube (say, a ProxyVM) should stay
 scoped to that qube and the task at hand. It shouldn't copy files between
 qubes, reach into another qube's private data (password stores, browser
 profiles, other credentials), or push data outside the qube it was given
@@ -100,18 +104,32 @@ access to, unless the task explicitly calls for it.
 
 ### No root for agents by default
 
-Agents get `user` over SSH, not root. Minimal templates ship without
-passwordless sudo by design, and that stays. Root-level steps are
-`[Human/dom0]` via `qvm-run -u root <qube> '<command>'`; the agent drafts
-the exact command or file, and a human reviews and runs it. Files
+Agents get `user` in a target qube, not root. This is a speed bump against
+accidents, not a boundary against attack: Qubes does not treat root/user
+separation inside a qube as a security boundary, and full templates such
+as `debian-13-xfce` ship passwordless sudo, which makes `user`
+root-equivalent there. Minimal templates ship without passwordless sudo
+by design, and that stays. The real boundary is which targets have a dom0
+policy line at all, so don't point an agent at qubes holding credentials
+it shouldn't have.
+
+Root is a per-target opt-in, controlled in dom0: each target has a
+commented-out `qubes.VMRootShell` allow line in
+`/etc/qubes/policy.d/30-user-agents.policy`, and a human uncomments it.
+To check whether root is on, probe with
+`echo id | qrexec-client-vm <target> qubes.VMRootShell`. A refusal is
+final: ask the human; don't look for a workaround.
+
+With root off, root-level steps are `[Human/dom0]` via
+`qvm-run -u root <qube> '<command>'`: the agent drafts the exact command
+or file, and a human reviews and runs it. The agent cannot write files
 executed as root at boot (`/rw/config/rc.local`,
 `/rw/config/qubes-firewall-user-script`, NetworkManager dispatcher
-scripts) are root-equivalent, so an agent never writes them in place: it
-proposes, a human installs. Full templates such as `debian-13-xfce` have
-passwordless sudo by default, so an agent SSH login to a qube on one is
-root-equivalent in that qube; don't point an agent at qubes holding
-credentials it shouldn't have. Setup and rationale:
-`doc/agents/agent-ssh-access.md`.
+scripts), so a human installs them. With root on, the agent may write
+those files, or anything else that alters a security control (sudoers,
+a kill switch), only after showing the human the full content and getting
+approval; this is enforced by instruction, not by permissions. Setup and
+rationale: `doc/agents/agent-qube-access.md`.
 
 ### Confirm before anything destructive or irreversible
 

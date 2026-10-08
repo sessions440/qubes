@@ -1,8 +1,5 @@
 # Coding-agent access to a qube — qrexec shell (preferred), SSH over qrexec (backup)
 
-Suggested repo path: `doc/agents/agent-qube-access.md` (replaces `agent-ssh-access.md`; see
-"Doc housekeeping").
-
 ## Context
 
 Goal: let a coding agent (Claude Code, OpenCode, etc.) running in a dedicated **agent qube**
@@ -29,8 +26,8 @@ This replaces the earlier IP-based design (SSH to the agent qube's upstream netv
   shell inside a TemplateVM. An agent has no path to these.
 - **[Human]**: interactive input or a judgment call that should not be delegated.
 - **[Agent/qrexec]**: runs as `user` from the agent qube through `qrexec-client-vm`. Works only
-  if a dom0 policy line already allows it; the agent cannot create one. *(New tag: the VMShell
-  counterpart of `[Agent/SSH]`; add it to `AGENTS.md`.)*
+  if a dom0 policy line already allows it; the agent cannot create one. *(The VMShell
+  counterpart of `[Agent/SSH]`; defined in `AGENTS.md`.)*
 - **[Agent/SSH]**: runs as `user` over SSH. Backup path only.
 
 ## Design decisions
@@ -297,18 +294,6 @@ Per target, after adding its policy line:
   maintenance entry. Revisit only if quoting mistakes recur or harness permission matching
   needs distinct command names.
 - **`qubes.VMRootShell` as the default.** See "Root access".
-
-## Doc housekeeping
-
-- **`AGENTS.md`:** add the `[Agent/qrexec]` role tag. Rewrite "No root for agents by default":
-  root off by default as a speed bump, opt-in via a commented-out `VMRootShell` policy line,
-  the approval practice above, and "a refusal is final". Update the link that points at
-  `agent-ssh-access.md`.
-- **`fix-silent-reconnect.md`:** prerequisites and `[Agent/SSH]` tags become `[Agent/qrexec]`
-  once the preferred path is verified on the real target.
-- **`vpn-proxyvm-gui.md`:** step 2 no longer needs `openssh-server`; step 7 becomes a policy
-  line plus the full-template caveat above.
-- **`vpn-proxyvm.md`:** update the pointer to this doc.
 
 ## Forward references
 

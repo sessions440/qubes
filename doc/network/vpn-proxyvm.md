@@ -15,7 +15,8 @@ design), so the `sudo ...` commands in this doc fail inside
 `sys-vpn-id0-proton`. Run them as root from dom0 instead
 (`qvm-run -u root sys-vpn-id0-proton '<command>'`, or an interactive
 root shell via `qvm-run -u root sys-vpn-id0-proton xterm`). An agent
-with SSH access has `user` only; see `agent-ssh-access.md`.
+with shell access (`qubes.VMShell`) has `user` only; see
+`agent-qube-access.md`.
 
 Rejected alternative: Proton's official Linux CLI. It depends on
 `gnome-keyring` / a D-Bus session bus, which never exists in an
@@ -232,8 +233,8 @@ fail-closed behavior, not a bug.
 
 - `fix-silent-reconnect.md` — NM autoconnect and multi-connection
   conflict fix for this qube (exclusivity dispatcher script).
-- `agent-ssh-access.md` — SSH access for a coding agent to administer
-  this qube, including the inbound-firewall rule that enables it.
+- `agent-qube-access.md` — qrexec (`qubes.VMShell`) access for a coding
+  agent to administer this qube, with SSH over qrexec as a backup.
 - `vpn-proxyvm-gui.md` — separate, on-demand GUI ProxyVM for one-off
   country routing.
 

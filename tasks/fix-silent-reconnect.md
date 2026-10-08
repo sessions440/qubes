@@ -34,8 +34,10 @@ Real connection names confirmed on this host: `qubes-CA-1040`,
 
 ## Prerequisites and privileges
 
-- SSH access from the agent qube to `sys-vpn-id0-proton`, set up per
-  `agent-ssh-access.md`.
+- Shell access from the agent qube to `sys-vpn-id0-proton` over qrexec
+  (`qubes.VMShell`), set up per `agent-qube-access.md`. Send a command
+  with
+  `printf '%s\n' '<command>' | qrexec-client-vm sys-vpn-id0-proton qubes.VMShell`.
 - **The agent has `user` only, no root.** `debian-13-minimal-net` does not
   ship passwordless `sudo` (by design), so `sudo ...` fails in this qube.
   Everything that needs root is run by a human from dom0 with
@@ -48,20 +50,20 @@ Real connection names confirmed on this host: `qubes-CA-1040`,
 
 - **[Human/dom0]** — requires dom0 privilege, root inside the qube via
   `qvm-run -u root`, or a shell inside the TemplateVM.
-- **[Agent/SSH]** — runs as `user` over SSH. Read-only checks and drafting
-  only.
+- **[Agent/qrexec]** — runs as `user` from the agent qube through
+  `qrexec-client-vm`. Read-only checks and drafting only.
 - **[Human]** — interactive step or review that should not be delegated.
 
 ## Part A — Disable autoconnect
 
-1. **[Agent/SSH]** Inventory current state (read-only). Record the output:
+1. **[Agent/qrexec]** Inventory current state (read-only). Record the output:
    ```bash
    nmcli -f NAME,TYPE,DEVICE,AUTOCONNECT,AUTOCONNECT-PRIORITY connection show
    ```
    Confirm all three connections above are present; note which currently
    show `AUTOCONNECT: yes`.
 
-2. **[Agent/SSH]** Read the current boot script and the interface names
+2. **[Agent/qrexec]** Read the current boot script and the interface names
    (read-only):
    ```bash
    cat /rw/config/rc.local
@@ -73,10 +75,13 @@ Real connection names confirmed on this host: `qubes-CA-1040`,
    `qubes-CA-1040` etc., which would mean the kill switch silently fails
    open. Expected fix: `"qubes*"` (or list all three names).
 
-3. **[Agent/SSH]** Draft the corrected file as
+3. **[Agent/qrexec]** Draft the corrected file as
    `~/rc.local.proposed` (same content as the current file with only the
-   fixes from step 2). Do not touch `/rw/config/rc.local`. Produce a
-   unified diff against it:
+   fixes from step 2). Do not touch `/rw/config/rc.local`. Write the draft
+   with a `cat > ~/rc.local.proposed` command, sending the file text on
+   stdin (untested; if it misbehaves, draft in the agent qube and
+   `qvm-copy` it, then adjust the path in step 5). Produce a unified diff
+   against it:
    ```bash
    diff -u /rw/config/rc.local ~/rc.local.proposed
    ```
@@ -177,14 +182,14 @@ acts on interfaces named `qubes-*`, so it is inert there.
    qvm-shutdown debian-13-minimal-net
    qvm-start sys-vpn-id0-proton
    ```
-   The agent's SSH session drops at the shutdown; reconnect after the
+   The agent's qrexec calls fail while the qube is down; retry after the
    restart.
 
 ## Verification
 
-Once `sys-vpn-id0-proton` is back up and SSH-reachable:
+Once `sys-vpn-id0-proton` is back up and reachable over qrexec:
 
-1. **[Agent/SSH]** Autoconnect and boot state: exactly one WireGuard
+1. **[Agent/qrexec]** Autoconnect and boot state: exactly one WireGuard
    connection is active and it is the intended default:
    ```bash
    nmcli -f NAME,AUTOCONNECT connection show
@@ -196,7 +201,7 @@ Once `sys-vpn-id0-proton` is back up and SSH-reachable:
    ```bash
    qvm-run -u root sys-vpn-id0-proton 'nmcli connection up qubes-CA-1048'
    ```
-   then **[Agent/SSH]** `nmcli connection show --active` should list only
+   then **[Agent/qrexec]** `nmcli connection show --active` should list only
    `qubes-CA-1048`. If not, **[Human/dom0]**
    `qvm-run -u root sys-vpn-id0-proton 'journalctl -u NetworkManager | grep -i dispatcher'`.
    Also try switching through the Qubes network widget, since that is the
@@ -210,7 +215,7 @@ Once `sys-vpn-id0-proton` is back up and SSH-reachable:
    and confirm downstream connectivity fails outright rather than falling
    back to clearnet.
 
-5. **[Agent/SSH]** No silent reactivation: with no connection active,
+5. **[Agent/qrexec]** No silent reactivation: with no connection active,
    leave the qube idle for several minutes and confirm nothing comes back
    up (`nmcli connection show --active`).
 
