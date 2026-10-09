@@ -1,4 +1,4 @@
-# Safe Text & File Transfer Into dom0 (`qube-pull`)
+# Safe Text & File Transfer Into dom0 (`qvm-pull`)
 
 ## Goal
 The primary goal is to securely copy text, configuration snippets, logs, or file contents from an AppVM directly into `dom0` without exposing `dom0` to the risks of unrestricted cross-domain clipboards.
@@ -12,11 +12,11 @@ qvm-run --pass-io <source-appvm> 'cat /path/to/file' > /path/to/destination_in_d
 ```
 This command runs a command inside the AppVM and streams its standard output straight back into `dom0`.
 
-## The Convenience Wrapper: `qube-pull`
-While `qvm-run --pass-io` is powerful, typing out the full command repeatedly is tedious. The `qube-pull` script acts as a lightweight wrapper to automate argument parsing, handle destination directory checks, and simplify daily usage.
+## The Convenience Wrapper: `qvm-pull`
+While `qvm-run --pass-io` is powerful, typing out the full command repeatedly is tedious. The `qvm-pull` script acts as a lightweight wrapper to automate argument parsing, handle destination directory checks, and simplify daily usage.
 
 ### The Script
-Save the following script as `qube-pull`:
+Save the following script as `qvm-pull`:
 
 ```bash
 #!/bin/bash
@@ -50,25 +50,25 @@ Run the following commands in a **`dom0` terminal**:
 
 1. **Create and open the file:**
    ```bash
-   sudo nano /usr/local/bin/qube-pull
+   sudo nano /usr/local/bin/qvm-pull
    ```
 2. **Paste the script contents**, then save and exit (`Ctrl+O`, `Enter`, `Ctrl+X`).
 3. **Make the script executable:**
    ```bash
-   sudo chmod +x /usr/local/bin/qube-pull
+   sudo chmod +x /usr/local/bin/qvm-pull
    ```
 
 ## Usage
-Once installed, you can call `qube-pull` from anywhere in `dom0`:
+Once installed, you can call `qvm-pull` from anywhere in `dom0`:
 
 ```bash
-qube-pull <source-appvm> <source-path> [destination-path]
+qvm-pull <source-appvm> <source-path> [destination-path]
 ```
 
 * **Example 1 (Pulling to a specific path):**
   ```bash
-  qube-pull personal-vm /home/user/notes.txt ~/Desktop/notes.txt
+  qvm-pull personal-vm /home/user/notes.txt ~/Desktop/notes.txt
   ```
 * **Example 2 (Using destination directory shorthand—defaults to current directory):**
   ```bash
-  qube-pull work-vm /etc/hosts ~/work_hosts_backup
+  qvm-pull work-vm /etc/hosts ~/work_hosts_backup
