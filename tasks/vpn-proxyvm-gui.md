@@ -42,6 +42,9 @@ Same convention as `fix-silent-reconnect.md`:
   allows.
 - **[Human]** — requires interactive input (credentials, GUI clicks) that
   should not be delegated to an agent regardless of access level.
+- **[Human or Agent/qrexec]** — a step done inside this qube that either can
+  run. Root inside this qube is `sudo` (full template, passwordless), shown
+  as *(root)*; no dom0 involved.
 
 ## Why a dedicated template, not the existing browsing/coding template
 
@@ -165,26 +168,31 @@ instead.
    only if you want it for a specific session.
 
 9. **Backstop kill switch (nftables, via `/rw/config/rc.local`).** Keep
-   this even with Advanced kill switch on. The two are independent: the
-   app's kill switch is enforced by the app inside this qube (and the app
-   has a known state-tracking bug, see Known risks), while this is a
-   `forward` chain with `policy drop` loaded at boot, before the app
-   starts, that lets forwarded traffic leave only through the tunnel. It
-   follows the same fail-closed pattern as `sys-vpn-id0-proton`.
+   this even with Advanced kill switch on, as an independent layer. The
+   app's kill switch is enforced by the app inside this qube (which has a
+   known state-tracking bug, see Known risks); this is a `forward` chain
+   with `policy drop`, loaded at boot before the app starts, that lets
+   forwarded traffic leave only through the tunnel. Same fail-closed
+   pattern as `sys-vpn-id0-proton`. Scope: forwarded traffic (downstream
+   qubes), not this qube's own traffic.
 
-   Scope: forwarded traffic, i.e. downstream qubes. It does not cover
-   this qube's own traffic; that is the app kill switch's job.
-
-   `/rw/config/rc.local` runs as root at every boot, so a human installs
-   it (see `AGENTS.md`). If an agent has a shell here (step 7), it may
-   draft the file, but the human reads it in full before installing.
+   **Where it runs.** Every command below runs inside
+   `sys-vpn-id0-proton-gui`, so either a human (terminal in the qube) or an
+   agent (`qubes.VMShell`, if step 7 granted one) can do it. dom0 is needed
+   only for the restart in step h. Commands marked *(root)* are shown
+   without `sudo`: in a terminal run `sudo -i` first; an agent prefixes each
+   with `sudo`. This full template has passwordless `sudo`, so `user` is
+   root-equivalent here. `/rw/config/rc.local` runs as root at every boot,
+   so the file is drafted without privileges, a human reads it in full, and
+   it is installed only after that approval (see `AGENTS.md`).
 
    a. **[Human]** Connect to any server once through the Proton app.
 
-   b. **[Human/dom0]** Find the tunnel interface name:
+   b. **[Human or Agent/qrexec]** Find the tunnel interface name (no root
+      needed):
       ```bash
-      qvm-run -p -u root sys-vpn-id0-proton-gui 'nmcli -f NAME,TYPE,DEVICE connection show --active'
-      qvm-run -p -u root sys-vpn-id0-proton-gui 'ip -br link'
+      nmcli -f NAME,TYPE,DEVICE connection show --active
+      ip -br link
       ```
       The tunnel is the active connection of type `wireguard` (or
       `tun`/`vpn` if you use an OpenVPN-based protocol); its `DEVICE` is
@@ -197,20 +205,21 @@ instead.
       dummies. Don't guess a name: earlier notes mention
       `pvpnrouteintrf0`, which is unconfirmed.
 
-   c. **[Human/dom0]** Look at the current file and back it up:
+   c. **[Human or Agent/qrexec]** *(root)* Look at the current file and back
+      it up:
       ```bash
-      qvm-run -p -u root sys-vpn-id0-proton-gui 'cat /rw/config/rc.local'
-      qvm-run -u root sys-vpn-id0-proton-gui 'cp -a /rw/config/rc.local /rw/config/rc.local.bak'
+      cat /rw/config/rc.local
+      cp -a /rw/config/rc.local /rw/config/rc.local.bak
       ```
       On a fresh qube it should hold only the stock comments. If it has
       anything else, merge the block below into it instead of replacing it.
 
-   d. **[Human/dom0]** Write the new file. Replace `<tunnel-iface>` with
-      the name from step b before running (if left unreplaced, the rule
-      matches nothing and all forwarding is dropped: fail-closed, but
-      useless). Run in a dom0 terminal:
+   d. **[Human or Agent/qrexec]** Draft the new file in the home directory
+      (no root). Replace `<tunnel-iface>` with the name from step b first
+      (if left unreplaced, the rule matches nothing and all forwarding is
+      dropped: fail-closed, but useless):
       ```bash
-      qvm-run --pass-io -u root sys-vpn-id0-proton-gui 'cat > /rw/config/rc.local' <<'RC_FILE'
+      cat > ~/rc.local.proposed <<'RC_FILE'
       #!/bin/bash
       # Backstop kill switch, independent of the Proton app.
       # Forwarded traffic may leave only through the VPN tunnel.
@@ -228,42 +237,47 @@ instead.
       }
       NFT
       RC_FILE
+
+      diff -u /rw/config/rc.local ~/rc.local.proposed
       ```
       The `table` / `delete table` / `table { ... }` sequence makes the
       file safe to re-run. The second rule accepts only reply traffic
       heading back to downstream qubes (`vif*`). Don't widen it to a bare
-      `ct state established,related accept`: that would also pass
-      packets of an already-established flow out of the uplink if the
-      tunnel dropped. This `vif*` form is a tightening over the rule in
-      `vpn-proxyvm.md`; confirm the downstream interface naming in step f.
-      The `qvm-run --pass-io` stdin form is untested here; step e shows
-      whether it worked. Fallback: open `qvm-run -u root
-      sys-vpn-id0-proton-gui xfce4-terminal` and create the file there.
+      `ct state established,related accept`: that would also pass packets
+      of an already-established flow out of the uplink if the tunnel
+      dropped. This `vif*` form is a tightening over the rule in
+      `vpn-proxyvm.md`; step g confirms the interface naming it assumes.
 
-   e. **[Human/dom0]** Make it executable, review it, and load it now:
+   e. **[Human]** Read the diff in full and approve it. An agent does not
+      continue until the human has approved.
+
+   f. **[Human or Agent/qrexec]** *(root)* Install and load it:
       ```bash
-      qvm-run -u root sys-vpn-id0-proton-gui 'chown root:root /rw/config/rc.local && chmod 0755 /rw/config/rc.local'
-      qvm-run -p -u root sys-vpn-id0-proton-gui 'cat /rw/config/rc.local'
-      qvm-run -p -u root sys-vpn-id0-proton-gui '/rw/config/rc.local && nft list table inet qubes-vpn-gui'
+      install -m 0755 -o root -g root ~/rc.local.proposed /rw/config/rc.local
+      /rw/config/rc.local
+      nft list table inet qubes-vpn-gui
       ```
-      Check that `cat` shows exactly the intended file and that the
-      listing shows `policy drop` and your interface name.
+      The listing should show `policy drop` and your interface name.
 
-   f. **[Human/dom0]** Confirm the downstream interface naming that the
-      `vif*` pattern assumes (start a downstream qube first, since its
-      `vif` only exists while it runs):
+   g. **[Human or Agent/qrexec]** With a downstream qube running (its
+      `vif` exists only while it runs), confirm the downstream interface
+      naming that the `vif*` pattern assumes:
       ```bash
-      qvm-run -p -u root sys-vpn-id0-proton-gui 'ip -br link | grep vif'
+      ip -br link | grep vif
       ```
 
-   g. **[Human/dom0]** Prove it survives a reboot:
+   h. **[Human/dom0]** Restart the qube to prove the file survives a
+      reboot (an agent's calls fail while it is down):
       ```bash
       qvm-shutdown --wait sys-vpn-id0-proton-gui
       qvm-start sys-vpn-id0-proton-gui
-      qvm-run -p -u root sys-vpn-id0-proton-gui 'nft list table inet qubes-vpn-gui'
       ```
-      The table must be present before you connect in the app. Then do
-      the Verification checks below.
+      Then **[Human or Agent/qrexec]** *(root)*:
+      ```bash
+      nft list table inet qubes-vpn-gui
+      ```
+      The table must be present before you connect in the app. Then do the
+      Verification checks below.
 
 10. **[Human/dom0]** Return the qube to its normal at-rest state:
     ```bash
@@ -299,7 +313,7 @@ restart is the fallback if it wedges.
   interface down via `nmcli`) and confirm the target AppVM's connectivity
   fails outright rather than falling back to clearnet. Repeat after
   rebooting the qube and before connecting, to cover the boot window.
-- Backstop check: `nft list table inet qubes-vpn-gui` in this qube shows
+- Backstop check: `nft list table inet qubes-vpn-gui` (root) in this qube shows
   `policy drop`, and downstream traffic works while connected (so the
   `oifname` rule matches the real tunnel name). Do this for every server
   and protocol you use.
@@ -327,8 +341,7 @@ restart is the fallback if it wedges.
 - Proton's kill switch was verified to block forwarded downstream traffic
   (see step 8). The step 9 backstop is kept anyway as an independent
   layer that doesn't depend on the app's behavior or its known bugs.
-- Not verified: the `vif*` reply rule in step 9 and the `qvm-run
-  --pass-io` file write.
+- Not verified: the `vif*` reply rule in step 9.
 
 ## Status
 
