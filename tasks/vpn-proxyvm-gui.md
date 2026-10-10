@@ -42,9 +42,9 @@ Same convention as `fix-silent-reconnect.md`:
   allows.
 - **[Human]** — requires interactive input (credentials, GUI clicks) that
   should not be delegated to an agent regardless of access level.
-- **[Human or Agent/qrexec]** — a step done inside this qube that either can
-  run. Root inside this qube is `sudo` (full template, passwordless), shown
-  as *(root)*; no dom0 involved.
+- **[Human or Agent/qrexec]** — a step done inside this qube that either
+  can run. `sudo` is passwordless here (full template), so `user` is
+  root-equivalent; no dom0 involved.
 
 ## Why a dedicated template, not the existing browsing/coding template
 
@@ -137,147 +137,50 @@ instead.
    the VMShell line as the real decision. Administering this qube by hand
    is a reasonable alternative.
 
-8. **[Human]** Enable Proton's own kill switch in the app, in **Advanced**
-   mode: Menu > Settings > Features, turn on the Kill switch toggle, then
-   click **Advanced** (Standard is selected by default).
-   - **Standard** only engages when an established connection drops by
-     accident. It does nothing while the VPN is deliberately disconnected
-     or before it has connected.
-   - **Advanced** blocks all traffic outside the VPN interface at all
-     times, including after a manual disconnect, and stays active across a
-     restart of the qube.
-   - Advanced fits this qube: it exists only to carry downstream traffic
-     through the tunnel, so the cost (no internet in the qube itself unless
-     connected) doesn't matter. If the qube ever needs the network while
-     disconnected (e.g. a re-login), switching the kill switch off for that
-     is a deliberate human decision; switch it back on afterward.
-   - Not compatible with split tunneling, which this setup skips anyway.
-   - This is the app-level kill switch, enforced by the app inside this
-     qube. Step 9 adds an independent one that does not depend on the app.
-   - Verified on this system: the app's kill switch also blocks traffic
-     forwarded from downstream qubes, not only this qube's own traffic.
-   - Sources: Proton's "Kill switch" and "Advanced kill switch" support
-     pages (protonvpn.com/support/what-is-kill-switch,
-     protonvpn.com/support/advanced-kill-switch).
+8. **[Human]** Enable Proton's kill switch in **Advanced** mode: Menu >
+   Settings > Features > Kill switch on, then click **Advanced**. Leave
+   NetShield off. (Why: [Kill switch notes](#kill-switch-notes).)
 
-   **NetShield (optional; recommend leaving it off).** NetShield is
-   Proton's DNS-level ad/tracker/malware blocking, available on paid
-   plans. Not needed here: this qube is for occasional one-off routing, DNS
-   filtering can break sites and make a routing problem harder to
-   diagnose, and downstream qubes can run their own blockers. Turn it on
-   only if you want it for a specific session.
+9. Add a backstop kill switch: forwarded traffic may leave only through
+   the VPN tunnel, enforced by nftables from boot, independent of the
+   app. (Why, and how it differs from `vpn-proxyvm.md`:
+   [Kill switch notes](#kill-switch-notes).)
 
-9. **Backstop kill switch (nftables, via `/rw/config/rc.local`).** Keep
-   this even with Advanced kill switch on, as an independent layer. The
-   app's kill switch is enforced by the app inside this qube (which has a
-   known state-tracking bug, see Known risks); this is a `forward` chain
-   with `policy drop`, loaded at boot before the app starts, that lets
-   forwarded traffic leave only through the tunnel. Same fail-closed
-   pattern as `sys-vpn-id0-proton`. Scope: forwarded traffic (downstream
-   qubes), not this qube's own traffic.
+   a. **[Human]** Connect to any server in the Proton app.
 
-   **Where it runs.** Every command below runs inside
-   `sys-vpn-id0-proton-gui`, so either a human (terminal in the qube) or an
-   agent (`qubes.VMShell`, if step 7 granted one) can do it. dom0 is needed
-   only for the restart in step h. Commands marked *(root)* are shown
-   without `sudo`: in a terminal run `sudo -i` first; an agent prefixes each
-   with `sudo`. This full template has passwordless `sudo`, so `user` is
-   root-equivalent here. `/rw/config/rc.local` runs as root at every boot,
-   so the file is drafted without privileges, a human reads it in full, and
-   it is installed only after that approval (see `AGENTS.md`).
-
-   a. **[Human]** Connect to any server once through the Proton app.
-
-   b. **[Human or Agent/qrexec]** Find the tunnel interface name (no root
-      needed):
+   b. **[Human or Agent/qrexec]** Find the tunnel interface name: the
+      `DEVICE` of the `wireguard` connection.
       ```bash
       nmcli -f NAME,TYPE,DEVICE connection show --active
-      ip -br link
       ```
-      The tunnel is the active connection of type `wireguard` (or
-      `tun`/`vpn` if you use an OpenVPN-based protocol); its `DEVICE` is
-      the name you want. Ignore `eth0`, `lo`, `vif*`, and the
-      `pvpn-killswitch` / `pvpn-ipv6leak-protection` entries, which are
-      Proton's kill-switch dummies, not the tunnel. Connect to a second
-      server (and each protocol you plan to use) and re-run the commands:
-      if the name stays the same, use it exactly; if it changes, use the
-      narrowest wildcard that matches every tunnel name and not the
-      dummies. Don't guess a name: earlier notes mention
-      `pvpnrouteintrf0`, which is unconfirmed.
 
-   c. **[Human or Agent/qrexec]** *(root)* Look at the current file and back
-      it up:
+   c. **[Human or Agent/qrexec]** Append the rules to `rc.local`, with the
+      name from step b in place of `<tunnel-iface>`. An agent shows the
+      human the full command and gets approval first (see `AGENTS.md`).
       ```bash
-      cat /rw/config/rc.local
-      cp -a /rw/config/rc.local /rw/config/rc.local.bak
-      ```
-      On a fresh qube it should hold only the stock comments. If it has
-      anything else, merge the block below into it instead of replacing it.
+      sudo tee -a /rw/config/rc.local <<'EOF'
 
-   d. **[Human or Agent/qrexec]** Draft the new file in the home directory
-      (no root). Replace `<tunnel-iface>` with the name from step b first
-      (if left unreplaced, the rule matches nothing and all forwarding is
-      dropped: fail-closed, but useless):
-      ```bash
-      cat > ~/rc.local.proposed <<'RC_FILE'
-      #!/bin/bash
-      # Backstop kill switch, independent of the Proton app.
-      # Forwarded traffic may leave only through the VPN tunnel.
-      TUNNEL_IFACE="<tunnel-iface>"
-
-      nft -f - <<NFT
-      table inet qubes-vpn-gui
-      delete table inet qubes-vpn-gui
-      table inet qubes-vpn-gui {
-        chain forward {
-          type filter hook forward priority 0; policy drop;
-          oifname "${TUNNEL_IFACE}" accept
-          ct state established,related oifname "vif*" accept
-        }
-      }
-      NFT
-      RC_FILE
-
-      diff -u /rw/config/rc.local ~/rc.local.proposed
-      ```
-      The `table` / `delete table` / `table { ... }` sequence makes the
-      file safe to re-run. The second rule accepts only reply traffic
-      heading back to downstream qubes (`vif*`). Don't widen it to a bare
-      `ct state established,related accept`: that would also pass packets
-      of an already-established flow out of the uplink if the tunnel
-      dropped. This `vif*` form is a tightening over the rule in
-      `vpn-proxyvm.md`; step g confirms the interface naming it assumes.
-
-   e. **[Human]** Read the diff in full and approve it. An agent does not
-      continue until the human has approved.
-
-   f. **[Human or Agent/qrexec]** *(root)* Install and load it:
-      ```bash
-      install -m 0755 -o root -g root ~/rc.local.proposed /rw/config/rc.local
-      /rw/config/rc.local
-      nft list table inet qubes-vpn-gui
-      ```
-      The listing should show `policy drop` and your interface name.
-
-   g. **[Human or Agent/qrexec]** With a downstream qube running (its
-      `vif` exists only while it runs), confirm the downstream interface
-      naming that the `vif*` pattern assumes:
-      ```bash
-      ip -br link | grep vif
+      # Backstop kill switch: forward only via the VPN tunnel
+      nft add table inet qubes-vpn-gui
+      nft add chain inet qubes-vpn-gui forward { type filter hook forward priority 0 \; policy drop \; }
+      nft add rule inet qubes-vpn-gui forward oifname "<tunnel-iface>" accept
+      nft add rule inet qubes-vpn-gui forward ct state established,related oifname "vif*" accept
+      EOF
+      sudo chmod +x /rw/config/rc.local
       ```
 
-   h. **[Human/dom0]** Restart the qube to prove the file survives a
-      reboot (an agent's calls fail while it is down):
+   d. **[Human/dom0]** Restart the qube so the rules load from boot:
       ```bash
       qvm-shutdown --wait sys-vpn-id0-proton-gui
       qvm-start sys-vpn-id0-proton-gui
       ```
-      Then **[Human or Agent/qrexec]** *(root)*:
+
+   e. **[Human or Agent/qrexec]** Confirm the table is loaded, with
+      `policy drop` and your interface name:
       ```bash
-      nft list table inet qubes-vpn-gui
+      sudo nft list table inet qubes-vpn-gui
       ```
-      The table must be present before you connect in the app. Then do the
-      Verification checks below.
+      Then run the [Verification](#verification) checks.
 
 10. **[Human/dom0]** Return the qube to its normal at-rest state:
     ```bash
@@ -309,24 +212,59 @@ restart is the fallback if it wedges.
 
 - From the target AppVM: `curl https://ifconfig.me` shows the IP of the
   country selected in the Proton app.
-- Kill switch check: disconnect from within the Proton app (or bring the
-  interface down via `nmcli`) and confirm the target AppVM's connectivity
-  fails outright rather than falling back to clearnet. Repeat after
-  rebooting the qube and before connecting, to cover the boot window.
-- Backstop check: `nft list table inet qubes-vpn-gui` (root) in this qube shows
-  `policy drop`, and downstream traffic works while connected (so the
-  `oifname` rule matches the real tunnel name). Do this for every server
-  and protocol you use.
-- Optional, human decision: to show the backstop works without the app's
-  kill switch, switch the app's kill switch off with the tunnel
-  disconnected, test from the downstream AppVM that connectivity still
-  fails, then switch it back on. This briefly weakens a control, so only
-  do it deliberately.
+- Kill switch: disconnect in the Proton app and confirm the target AppVM
+  loses connectivity rather than falling back to clearnet. Repeat after
+  rebooting the qube, before connecting.
+- Backstop: step 9e shows `policy drop`, and downstream traffic works while
+  connected, on every server and protocol you use. To test it alone, turn
+  the app's kill switch off with the tunnel disconnected, confirm the
+  downstream AppVM still has no connectivity, then turn it back on (this
+  briefly weakens a control: a human decision).
 - Confirm this qube's own entry in the Qubes network widget shows a
   single managed connection, not a flood of pre-imported server entries —
   this is expected behavior for the modern official app (it reuses one
   connection object per selection) rather than the older, unofficial
   community import scripts that pre-populate hundreds of static profiles.
+
+## Kill switch notes
+
+**Standard vs Advanced (step 8).** Standard engages only when an
+established connection drops by accident; it does nothing during a
+deliberate disconnect or before the first connect. Advanced blocks all
+traffic outside the VPN interface at all times and persists across
+restarts. This qube exists only to carry downstream traffic through the
+tunnel, so Advanced costs nothing. If the qube itself needs the network
+while disconnected (e.g. a re-login), turn the kill switch off
+deliberately, then back on. Advanced is incompatible with split tunneling,
+which this setup skips. Verified on this system: the app's kill switch also
+blocks forwarded downstream traffic. Sources:
+protonvpn.com/support/what-is-kill-switch,
+protonvpn.com/support/advanced-kill-switch.
+
+**NetShield (step 8; leave off).** DNS-level ad/tracker/malware blocking,
+paid plans only. Not needed for occasional one-off routing: DNS filtering
+can break sites and obscure routing problems, and downstream qubes can run
+their own blockers. Enable it only for a specific session.
+
+**Why a backstop (step 9).** The app's kill switch is enforced by the app
+inside this qube, which has a known state-tracking bug (see Known risks).
+The nftables rules load at boot before the app starts and don't depend on
+it. Same fail-closed pattern as step 6 of `vpn-proxyvm.md`, with three
+differences:
+- The app, not you, creates and names the tunnel interface, so the name is
+  read off the system (step 9b) instead of following a `qubes*` naming
+  convention. If it changes between servers or protocols, use the
+  narrowest wildcard that matches every tunnel name. Proton's kill-switch
+  `pvpn-*` connections are not the tunnel, and interface names reported
+  elsewhere (e.g. `pvpnrouteintrf0`) are unconfirmed.
+- There is no `nmcli connection up` line: the app manages the connection.
+- The reply rule accepts established traffic only toward downstream qubes
+  (`vif*`). A bare `ct state established,related accept`, as in
+  `vpn-proxyvm.md`, could pass an already-established flow out the uplink
+  if the tunnel dropped.
+
+If `<tunnel-iface>` is left unreplaced, nothing matches and all forwarding
+is dropped: fail-closed, but useless.
 
 ## Known risks / open questions
 
@@ -335,13 +273,11 @@ restart is the fallback if it wedges.
   indefinitely; a restart of the app may be needed to resync. Not fatal,
   but expect occasional flakiness distinct from anything in
   `sys-vpn-id0-proton`.
-- The tunnel interface name in step 9 must be taken from this system,
-  not from notes. Until it is confirmed, the backstop either blocks
-  everything (fail-closed) or matches too broadly.
-- Proton's kill switch was verified to block forwarded downstream traffic
-  (see step 8). The step 9 backstop is kept anyway as an independent
-  layer that doesn't depend on the app's behavior or its known bugs.
-- Not verified: the `vif*` reply rule in step 9.
+- The tunnel interface name in step 9 must come from this system, not
+  from notes.
+- Not verified: the `vif*` reply rule in step 9. If the name is wrong,
+  connected downstream qubes lose connectivity (fail-closed), which the
+  Verification checks will show.
 
 ## Status
 

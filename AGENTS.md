@@ -40,6 +40,14 @@ AGENTS.md       — this file
     already-running qube over SSH.
   - `[Human]` — requires interactive input (credentials, GUI
     interaction) that shouldn't be delegated regardless of access level.
+- **Keep instructions tight.** A setup step should be readable by a human
+  at a glance: role tag, the action, the exact commands, and at most a
+  sentence or two of explanation. Longer rationale (option comparisons, why
+  a rule is shaped as it is, gotchas) goes in a separate section later in
+  the doc, linked from the step. Prefer fewer steps and one command per
+  action; don't add procedure (backups, diffs, idempotence tricks, extra
+  confirmation steps) beyond what the task needs and the Verification
+  section already covers.
 - **Verify before trusting.** Placeholder names from earlier drafts have
   drifted from real deployed names before. Before treating any existing
   doc's example names, filenames, or values as current, check them
