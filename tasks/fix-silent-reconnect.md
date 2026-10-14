@@ -1,6 +1,48 @@
-# Fix: NetworkManager multi-connection conflicts on `sys-vpn-id0-proton`
+# Fix: NetworkManager multi-connection conflicts on `sys-vpn-id0-proton` — SHELVED
 
-## Context
+## Shelved (2026-10-13)
+
+**This task is shelved. Do not execute it.** Nothing below has been run, and
+the original design is preserved unchanged further down in case it is ever
+needed.
+
+### Why
+
+1. **`sys-vpn-id0-proton` is demoted to a cold fallback with a single
+   connection config** (`vpn-proxyvm.md`, "Planned change"). The default VPN
+   path is now `sys-vpn-id0-proton-gui`, which runs Proton's app and manages
+   its own connection (`vpn-proxyvm-gui.md`).
+2. **Problem 2 (multiple simultaneously-active default-route tunnels) needs
+   at least two configs.** With one connection it cannot occur, so the
+   exclusivity dispatcher script (Part B) has nothing to enforce.
+3. **Problem 1 (silent default reconnection) is no longer a defect.** With a
+   single config, autoconnect of that one connection is the intended
+   behavior, and the qube is normally shut down.
+4. **Part B edits a template shared with another qube.** The dispatcher
+   script belongs in `debian-13-minimal-net`, which also backs `lan-proxy`.
+   That blast radius is not worth paying for a fallback.
+
+### When to unshelve
+
+- Several configs return to use in `sys-vpn-id0-proton`.
+- `sys-vpn-id0-proton` becomes a primary path again.
+- The template-level dispatcher approach is wanted for other WireGuard qubes.
+
+### Worth keeping in mind meanwhile
+
+- Per this doc's last status nothing was applied, but verify the live
+  `/rw/config/rc.local` and the autoconnect flags before assuming.
+- The interface-name check in Part A step 2 is cheap and independent of the
+  rest: confirm the `oifname` pattern in the kill switch matches the real
+  interface name (`qubes*` in `vpn-proxyvm.md`).
+- The boot-ordering question (does `rc.local` run before NetworkManager is
+  ready?) is moot for the single config while autoconnect stays on.
+
+---
+
+## Preserved design (shelved; unchanged from the original)
+
+### Context
 
 Two related NetworkManager (NM) issues on `sys-vpn-id0-proton`:
 
@@ -32,7 +74,7 @@ Target qube: `sys-vpn-id0-proton`, template `debian-13-minimal-net` (`debian-13-
 Real connection names confirmed on this host: `qubes-CA-1040`,
 `qubes-CA-1048`, `qubes-US-MI-19`.
 
-## Prerequisites and privileges
+### Prerequisites and privileges
 
 - Shell access from the agent qube to `sys-vpn-id0-proton` over qrexec
   (`qubes.VMShell`), set up per `agent-qube-access.md`. Send a command
@@ -46,7 +88,7 @@ Real connection names confirmed on this host: `qubes-CA-1040`,
   scripts) are root-equivalent. The agent **drafts** them; a human reviews
   and installs them. The agent never writes them in place.
 
-## Role tags
+### Role tags
 
 - **[Human/dom0]** — requires dom0 privilege, root inside the qube via
   `qvm-run -u root`, or a shell inside the TemplateVM.
@@ -54,7 +96,7 @@ Real connection names confirmed on this host: `qubes-CA-1040`,
   `qrexec-client-vm`. Read-only checks and drafting only.
 - **[Human]** — interactive step or review that should not be delegated.
 
-## Part A — Disable autoconnect
+### Part A — Disable autoconnect
 
 1. **[Agent/qrexec]** Inventory current state (read-only). Record the output:
    ```bash
@@ -104,7 +146,7 @@ Real connection names confirmed on this host: `qubes-CA-1040`,
    qvm-run -u root sys-vpn-id0-proton 'nmcli connection modify qubes-US-MI-19 connection.autoconnect no'
    ```
 
-### Open risk: boot ordering
+#### Open risk: boot ordering
 
 `rc.local` can run **before NetworkManager is ready** (a known gotcha on
 minimal Debian templates), in which case `nmcli connection up ...` in
@@ -121,7 +163,7 @@ not yet tried): wait for NM in a backgrounded line, e.g.
 the default connection up from a dispatcher script on the uplink's `up`
 event. Do **not** re-enable autoconnect as the workaround.
 
-## Part B — Exclusive-activation dispatcher script
+### Part B — Exclusive-activation dispatcher script
 
 This is the proper fix for multi-connection conflicts: a NetworkManager
 dispatcher script that fires on the generic `up` event for any interface
@@ -185,7 +227,7 @@ acts on interfaces named `qubes-*`, so it is inert there.
    The agent's qrexec calls fail while the qube is down; retry after the
    restart.
 
-## Verification
+### Verification
 
 Once `sys-vpn-id0-proton` is back up and reachable over qrexec:
 
@@ -219,7 +261,7 @@ Once `sys-vpn-id0-proton` is back up and reachable over qrexec:
    leave the qube idle for several minutes and confirm nothing comes back
    up (`nmcli connection show --active`).
 
-## Report back
+### Report back
 
 - Final `AUTOCONNECT` state of all three connections.
 - The diff applied to `/rw/config/rc.local`, and the final kill-switch
@@ -230,7 +272,7 @@ Once `sys-vpn-id0-proton` is back up and reachable over qrexec:
   mode `750`.
 - Results of all five verification checks.
 
-## Do not
+### Do not
 
 - Re-enable `connection.autoconnect` on any of the three connections.
 - Rely on NM's own autoconnect logic to bring up the default connection.
@@ -243,5 +285,6 @@ Once `sys-vpn-id0-proton` is back up and reachable over qrexec:
 
 ## Status
 
-Design proposed, not yet implemented. The dispatcher approach rests on
-NM's generic dispatcher events; it has not yet been run on this system.
+**Shelved (2026-10-13).** Design proposed, never implemented. The dispatcher
+approach rests on NM's generic dispatcher events and has not been run on
+this system. See "Shelved" above for why, and when to unshelve.

@@ -1,11 +1,20 @@
-# GUI ProxyVM for ProtonVPN (`sys-vpn-id0-proton-gui`) — Design & Setup
+# GUI ProxyVM for ProtonVPN (`sys-vpn-id0-proton-gui`) — Always-On Default Design & Setup
 
 ## Context
 
-Purpose: recover ProtonVPN's load-aware server selection and one-click
-switching UX for **temporary, one-off country routing** from a given
-AppVM — something the static-`.conf` approach in `sys-vpn-id0-proton`
-can't offer.
+Purpose: make `sys-vpn-id0-proton-gui`, a dedicated qube running Proton's
+official Linux GUI app, the **default, always-on VPN NetVM** for the AppVMs
+that currently use `sys-vpn-id0-proton`. This recovers ProtonVPN's load-aware
+server selection and interactive switching, which the static-`.conf`
+approach in `sys-vpn-id0-proton` cannot offer, and avoids the maintenance
+burden of that approach (see `fix-silent-reconnect.md`, now shelved).
+
+History: this doc originally described an **on-demand** qube, normally shut
+down and pointed at temporarily. Decision of 2026-10-13: it becomes the
+default instead, started automatically by downstream qubes. `sys-vpn-id0-proton`
+is demoted to a cold fallback (see `vpn-proxyvm.md`).
+
+Chain: `AppVM → sys-vpn-id0-proton-gui → sys-firewall → sys-net`
 
 Kept **completely separate** from `sys-vpn-id0-proton` rather than merged
 into it. Two independent reasons:
@@ -13,63 +22,96 @@ into it. Two independent reasons:
 - Proton's official Linux app has an open, unresolved bug (v4.14.0, as of
   Feb 2026) where it sometimes fails to recognize its own connection
   state correctly. Running it in the same qube as the manually-imported
-  `qubes-*` configs + exclusive-activation dispatcher script would mean
-  reasoning about interaction between two different connection-management
-  layers. Full separation means two independent NM instances in two
-  independent qubes — nothing to reconcile.
-- Keeping Proton's account credentials in a qube that does nothing else
-  (no browser, no editor, no untrusted content) preserves the isolation
-  property that makes a ProxyVM-based kill switch meaningful in the first
-  place: a compromised downstream qube has no code-execution path into
-  this one. See the discussion in this repo on running ProtonVPN directly
-  inside a general-purpose AppVM for the fuller reasoning — the risk
-  identified there (credential colocation with untrusted content,
-  self-enforced kill switch defeatable by whatever compromised the same
-  qube) is exactly what a dedicated, nothing-else-runs-here qube avoids.
-
-Normally kept **shut down**. Started on demand; a target AppVM's `netvm`
-is pointed at it temporarily, then reverted.
-
-Chain: `AppVM → sys-vpn-id0-proton-gui → sys-firewall → sys-net`
+  `qubes-*` configs would mean reasoning about two connection-management
+  layers. Two qubes means two independent NM instances; nothing to reconcile.
+- Keeping Proton's session in a qube that does nothing else (no browser,
+  no editor, no untrusted content) preserves the isolation property that
+  makes a ProxyVM-based kill switch meaningful: a compromised downstream
+  qube has no code-execution path into this one.
 
 ## Role tags
 
-Same convention as `fix-silent-reconnect.md`:
+Same convention as `AGENTS.md`:
 - **[Human/dom0]** — requires dom0 privilege, root inside a qube via
-  `qvm-run -u root`, or a shell opened inside a TemplateVM. No agent path to dom0 or a TemplateVM.
+  `qvm-run -u root`, or a shell opened inside a TemplateVM. No agent path.
 - **[Agent/qrexec]** — runs as `user` from the agent qube through
   `qrexec-client-vm`, in an already-running qube that a dom0 policy line
-  allows.
-- **[Human]** — requires interactive input (credentials, GUI clicks) that
-  should not be delegated to an agent regardless of access level.
-- **[Human or Agent/qrexec]** — a step done inside this qube that either
-  can run. `sudo` is passwordless here (full template), so `user` is
-  root-equivalent; no dom0 involved.
+  allows. **No such policy line exists for this qube by design** (step 8).
+- **[Human]** — interactive input (credentials, GUI clicks) that should
+  not be delegated regardless of access level.
+
+## Why the GUI app (decision record, 2026-10-13)
+
+- **Versus static WireGuard configs** (`vpn-proxyvm.md`): the original
+  rejection of Proton's tooling rested on the CLI needing a D-Bus session
+  and keyring, which a minimal loginless qube lacks. That argument does not
+  apply to a full desktop template, which starts a desktop session at boot.
+  The claim that the Qubes community converges on static configs is
+  overstated: the Qubes forum has a long-running guide for running the Proton
+  app in a dedicated qube, and a separate WireGuard-without-the-app guide.
+  Static configs also go stale: Proton says a retired server means new
+  config files must be downloaded.
+- **Versus the Proton CLI:** finely balanced, either is defensible. The
+  GUI wins on the official auto-connect setting and the server list with
+  load. The CLI wins on scriptable switching. See "CLI qube sketch" below.
+- **Provider independence** is the real advantage of static configs, and is
+  retained by keeping `sys-vpn-id0-proton` as a cold fallback.
+
+## Architecture options
+
+Stated during the design discussion; **option 1 is the plan**. Options 2–4
+are alternatives for the Proton app itself, and option 5 is orthogonal and
+combines with any of them.
+
+1. **GUI only, one qube.** The plan in this doc. Simplest.
+2. **CLI only, one qube.** Scriptable, but loses the official auto-connect
+   and the load-aware list; the autostart launcher has to be self-built.
+3. **Two qubes on the same template.** `sys-vpn-id0-proton-gui` stays the
+   interactive default and a second qube is used for CLI experiments. The
+   GUI/CLI exclusivity applies per qube, so there is no conflict. The cost
+   is two qubes holding Proton sessions. Both qubes share one template, so
+   there is no template drift. This is the planned route for experimenting
+   with the CLI; sketch below.
+4. **One CLI qube per exit** (`...-ca`, `...-us`, and so on), each pinned with
+   `protonvpn connect --country XX`. Switching exits means changing an
+   AppVM's `netvm`, so other downstream qubes are not dropped. Costs: RAM
+   per qube, and the plan's simultaneous-connection limit (not checked).
+5. **Keep `sys-vpn-id0-proton` as a cold fallback**, with a single config
+   (`vpn-proxyvm.md`).
 
 ## Why a dedicated template, not the existing browsing/coding template
 
 **Do not install this into the existing customized `debian-13-xfce`
-template used for Brave/Codium AppVMs.** That would recreate exactly the
-credential-colocation problem described above. Clone a fresh template
-instead.
+template used for Brave/Codium AppVMs.** That would put Proton's session
+next to untrusted content. Clone a fresh template instead.
 
 ## Dependency notes
 
 - Full desktop templates already ship `qubes-core-agent-network-manager`
-  and start a real desktop/D-Bus session at qube boot — this is why
-  `nm-applet` and notifications work normally in `sys-net`/`sys-usb` even
-  though you never see a full desktop shell for those qubes. This means
-  the "headless" failure mode that blocks Proton's official CLI (no
-  D-Bus session bus, no unlocked keyring) does **not** apply here.
-- Install Proton's official Linux app per their current published
-  instructions at setup time — packaging has changed before and may
-  again; verify the package signature/checksum against Proton's
-  published values rather than trusting a raw download.
+  and start a real desktop/D-Bus session at qube boot. This is why
+  `nm-applet` works in `sys-net`/`sys-usb`. The "headless" failure mode
+  that blocks Proton's CLI on minimal templates does **not** apply here.
+- Proton's Debian package `proton-vpn-gnome-desktop` installs **both** the
+  GUI app and the CLI. They cannot run at the same time in one qube.
+- Proton officially supports the latest stable Debian and Ubuntu running
+  GNOME. Other desktops (this template is XFCE) are not officially
+  supported; community reports say the app works there.
+- Both the GUI and the CLI require NetworkManager and a keyring
+  (gnome-keyring); the CLI is documented as not working headless.
+- Install per Proton's current official instructions at setup time
+  (as of 2026-10-13: add Proton's repo via their release package, verify its
+  checksum against the value on their page, then
+  `apt install proton-vpn-gnome-desktop`). Do not trust a raw download.
 - `wireguard-tools` should be installed explicitly regardless of what
   Proton's installer pulls in. `openssh-server` is needed only for the SSH
   backup path in `agent-qube-access.md`; it is not installed by default.
 
 ## Setup
+
+If the qube already exists, check Part A against the live system and
+continue at Part B.
+
+### Part A — Create the qube
 
 1. **[Human/dom0]** Clone a fresh template — not the loaded
    browsing/coding one:
@@ -89,8 +131,9 @@ instead.
    ```
 
 3. **[Human/dom0]**, same shell — install the ProtonVPN Linux app per
-   Proton's current official instructions. Verify the package signature
-   before installing. Skip instructions to enable split tunneling.
+   Proton's current official instructions (see Dependency notes). Verify
+   the checksum before installing. Skip instructions to enable split
+   tunneling.
 
 4. **[Human/dom0]** Shut down the template:
    ```bash
@@ -108,177 +151,236 @@ instead.
 
    qvm-service sys-vpn-id0-proton-gui network-manager on
    ```
-   If instead you use the dom0 "Create New Qube" GUI, you may add Proton VPN to the applications list now, so it's available in the Qubes menu.
+   Community guides also set initial memory to about 400 MB, uncheck
+   "Include in memory balancing", and add `qubes-firewall` under Services.
+   Verify the services against the live qube. If you use the "Create New
+   Qube" GUI, you can add Proton VPN to the applications list now.
 
-6. **[Human]** Start the qube and log into the Proton
-   app interactively — this is credential entry (possibly with 2FA) and
-   should not be scripted or delegated to an agent.
+6. **[Human]** Start the qube and sign in to the Proton app interactively.
+   This is credential entry (possibly with 2FA) and must not be delegated
+   to an agent. The session lives in this qube's own `$HOME`/keyring, not
+   the template: signing in during template customization would bake the
+   session into every qube cloned from that template.
 
-   If prompted to choose a password for a new keyring, use an empty password and select "Continue". If you encounter trouble (Proton VPN GUI says "unexpected error occurred") then clear Proton cache and config, and reset the local keyrings directory:
+   If prompted for a keyring password, the older guidance was an empty
+   password and "Continue". **Caution:** one GitHub issue (age unknown,
+   possibly fixed) reports that with an empty-password keyring the app
+   deleted its entry at launch and recreated the keyring every reboot. This
+   matters for unattended boot (Part B), so test it (Part B, step 3).
+   If the app says "unexpected error occurred", clear its state and retry:
    ```bash
    rm -rf ~/.cache/Proton ~/.config/Proton ~/.local/share/keyrings/*
    ```
-   Then reboot the qube and try again.
-   
-   This session lives in
-   `sys-vpn-id0-proton-gui`'s own persistent `$HOME`/keyring, not the
-   template — logging in during template customization would bake the
-   session into the shared image instead, which is the wrong place for
-   it (every AppVM cloned from that template would inherit the same
-   session).
+   Then reboot the qube.
 
 7. **[Human/dom0, then Agent/qrexec]** Decide whether the agent gets any
-   shell in this qube at all. It is on a full template
-   (`debian-13-xfce-net`), which has passwordless `sudo`, so a
-   `qubes.VMShell` shell as `user` is root-equivalent here, and this qube
-   holds Proton's account credentials. If yes, add a `qubes.VMShell` allow
-   line for it per `agent-qube-access.md`; root-off is moot on this
-   template, so keep the `qubes.VMRootShell` line commented out and treat
-   the VMShell line as the real decision. Administering this qube by hand
-   is a reasonable alternative.
+   shell in this qube. **Decision: no.** It is on a full template with
+   passwordless `sudo`, so a `qubes.VMShell` shell as `user` is
+   root-equivalent here, and this qube holds a Proton session (see
+   "Session credentials"). Do not add a `qubes.VMShell` line for it and
+   keep the `qubes.VMRootShell` line commented out. Administer it by hand.
 
-8. **[Human]** Enable Proton's kill switch in **Advanced** mode: Menu >
-   Settings > Features > Kill switch on, then click **Advanced**. Leave
-   NetShield off. (Why: [Kill switch notes](#kill-switch-notes).)
+### Part B — Make it the always-on default
 
-9. Add a backstop kill switch: forwarded traffic may leave only through
-   the VPN tunnel, enforced by nftables from boot, independent of the
-   app. (Why, and how it differs from `vpn-proxyvm.md`:
-   [Kill switch notes](#kill-switch-notes).)
-
-   a. **[Human]** Connect to any server in the Proton app.
-
-   b. **[Human or Agent/qrexec]** Find the tunnel interface name: the
-      `DEVICE` of the `wireguard` connection.
-      ```bash
-      nmcli -f NAME,TYPE,DEVICE connection show --active
-      ```
-
-   c. **[Human or Agent/qrexec]** Append the rules to `rc.local`, with the
-      name from step b in place of `<tunnel-iface>`. An agent shows the
-      human the full command and gets approval first (see `AGENTS.md`).
-      ```bash
-      sudo tee -a /rw/config/rc.local <<'EOF'
-
-      # Backstop kill switch: forward only via the VPN tunnel
-      nft add table inet qubes-vpn-gui
-      nft add chain inet qubes-vpn-gui forward { type filter hook forward priority 0 \; policy drop \; }
-      nft add rule inet qubes-vpn-gui forward oifname "<tunnel-iface>" accept
-      nft add rule inet qubes-vpn-gui forward ct state established,related oifname "vif*" accept
-      EOF
-      sudo chmod +x /rw/config/rc.local
-      ```
-
-   d. **[Human/dom0]** Restart the qube so the rules load from boot:
-      ```bash
-      qvm-shutdown --wait sys-vpn-id0-proton-gui
-      qvm-start sys-vpn-id0-proton-gui
-      ```
-
-   e. **[Human or Agent/qrexec]** Confirm the table is loaded, with
-      `policy drop` and your interface name:
-      ```bash
-      sudo nft list table inet qubes-vpn-gui
-      ```
-      Then run the [Verification](#verification) checks.
-
-10. **[Human/dom0]** Return the qube to its normal at-rest state:
-    ```bash
-    qvm-shutdown sys-vpn-id0-proton-gui
-    ```
-
-## Usage (on demand)
-
-1. **[Human/dom0]** `qvm-start sys-vpn-id0-proton-gui`
-2. **[Human]** Open its window and pick a country/server via the Proton
-   app's own UI.
-3. **[Human/dom0]** Point the target AppVM at it:
+1. **[Human]** Autostart the app at qube boot. Autostart is plain XDG
+   autostart, not a Proton feature; community Qubes guides symlink the
+   app's `.desktop` file. The filename has changed before
+   (`protonvpn-app.desktop` → `proton.vpn.app.gtk.desktop`, reported
+   Sept 2025), so check the real name first. In the qube:
    ```bash
-   qvm-prefs <target-appvm> netvm sys-vpn-id0-proton-gui
+   ls /usr/share/applications | grep -i proton
+   mkdir -p ~/.config/autostart
+   ln -s /usr/share/applications/<real-name>.desktop ~/.config/autostart/
    ```
-4. Use it.
-5. **[Human/dom0]** Revert the target AppVM's `netvm` to its normal
-   value, then shut this qube back down:
-   ```bash
-   qvm-prefs <target-appvm> netvm <original-netvm>
-   qvm-shutdown sys-vpn-id0-proton-gui
-   ```
+   This lives in the AppVM's private volume, so it needs no template change.
 
-Changing `netvm` on a running qube is supported but has occasional
-reports of getting stuck — test on a low-stakes AppVM first; a qube
-restart is the fallback if it wedges.
+2. **[Human]** In the app: Settings → General → **Auto connect**, and
+   optionally **Start app minimized**. Auto-connect is an official feature;
+   it is documented as connecting when the app starts, not on every
+   re-link after a drop.
+
+3. **[Human]** **Cold-boot test (main risk).** Shut the qube down, start it,
+   and confirm the tunnel comes up with no clicks. Repeat a few times. A
+   forum report says the app opens but never connects; the cause was not
+   found and the keyring is only a suspect. If it fails, check the keyring
+   (Part A step 6 caution) before anything else.
+
+4. **[Agent/qrexec drafts, Human/dom0 installs]** Kill-switch backstop.
+   Reports say the app's own kill switch has not worked reliably, and one
+   guide warns it is not guaranteed if the app crashes. Add a qube-level
+   rule that never forwards downstream traffic out the uplink, so only the
+   tunnel can carry it. The community pattern (verify the exact syntax on
+   this system) in `/rw/config/qubes-firewall-user-script`:
+   ```bash
+   #!/bin/bash
+   # Fail-closed: never forward downstream traffic out the uplink.
+   nft add rule qubes custom-forward oifname eth0 counter drop
+   nft add rule ip6 qubes custom-forward oifname eth0 counter drop
+   ```
+   This avoids depending on the tunnel interface's name. Confirm the uplink
+   is `eth0` with `ip -br link`, and make the file executable. The file
+   runs as root at boot, so a human reviews and installs it (`AGENTS.md`).
+   Open issue: `agent-qube-access.md` notes reports of this hook being
+   ignored, so verify it applies after a reboot
+   (`nft list chain ip qubes custom-forward`). The alternative is an
+   `rc.local` table as in `vpn-proxyvm.md`; pick one mechanism, not both.
+   Also keep Proton's own kill switch enabled if the app offers it, but
+   test with and without it for interference with forwarded traffic
+   (untested).
+
+5. **[Human]** DNS check after connect. From a downstream AppVM, run a DNS
+   leak test and confirm resolution goes through the tunnel.
+
+6. **[Human/dom0]** Cutover, one AppVM at a time, lowest-stakes first.
+   Shut the AppVM down first, since changing `netvm` on a running qube
+   occasionally wedges:
+   ```bash
+   qvm-ls -O NAME,NETVM | awk '$2=="sys-vpn-id0-proton"{print $1}'
+   qvm-shutdown <appvm>
+   qvm-prefs <appvm> netvm sys-vpn-id0-proton-gui
+   ```
+   Rollback is the same command pointing back at `sys-vpn-id0-proton`. Do
+   not change `qubes-prefs default_netvm` unless that is how these qubes
+   are configured.
+
+7. **[Human/dom0]** Stop treating the qube as normally shut down. Starting a
+   downstream qube starts it automatically. Downstream qubes have **no
+   connectivity until the tunnel is up**; avoid network-dependent
+   autostarts in them.
+
+### Switching, reconnect and the tray
+
+- **Server switching:** open the qube's window and pick a server. Downstream
+  qubes lose connectivity briefly. This is expected behavior.
+- **Reconnect (decision: no watchdog).** With the backstop verified, a lost
+  tunnel fails closed and downstream qubes see no connectivity. The cost is
+  a manual reconnect. The likely triggers on a laptop are suspend/resume and
+  Wi-Fi changes; whether the app reconnects by itself then is not known.
+  Test suspend/resume before treating this as rare.
+- **Window and tray.** The app has "Start app minimized" and an optional
+  tray icon (show/hide, connect/disconnect, quit). On GNOME the tray icon
+  needs an AppIndicator extension; whether it appears in Qubes is untested,
+  and a StatusNotifier-to-XEmbed bridge such as `snixembed` may be needed.
+  Hiding the window does not free memory; the process keeps running.
+
+## Session credentials
+
+- The username and password are needed for sign-in. Proton's Python client
+  library authenticates with them and then works with an access token and a
+  refresh token, and a stored session can be reloaded and refreshed without
+  the password. The Linux app stores its credentials through a system-keyring
+  library. **What the app writes to disk was not confirmed.**
+- To check, a **[Human]** can search the keyring entries and
+  `~/.config/Proton` for the password after signing in, without pasting any
+  secret into an agent's context.
+- Even if only tokens are stored, they are bearer credentials, the keyring
+  is unlocked inside the running session, and `user` is root-equivalent on
+  this template. Token-only storage limits damage (the Proton password,
+  which also covers other Proton services, is not on disk, and the session
+  should be revocable from the Proton account; verify the revoke option in
+  the UI) but does not make agent shell access safe. Step 8 stands.
+
+## CLI qube sketch (option 3; for later experiments)
+
+Not a complete procedure. Facts as of 2026-10-13:
+
+- Install: `proton-vpn-gnome-desktop` already includes the CLI.
+- Commands: `protonvpn signin [username]`, `protonvpn connect` (fastest;
+  or `--country`, `--city`, a server name), `protonvpn disconnect`,
+  `protonvpn signout`, `protonvpn config set <option> <value>`. Settings
+  reset to defaults on sign-out.
+- Features per the README: kill switch, NetShield, port forwarding, custom
+  DNS, IPv6, VPN Accelerator, NAT type; WireGuard only; no split tunneling.
+- No documented auto-connect or start-at-boot setting. Proton's roadmap says
+  auto-launch is coming for the regular Linux app. A startup script is a
+  well-worn path, and here it belongs in desktop-session autostart so it has
+  D-Bus and the keyring. A root systemd unit probably would not see the
+  user's keyring.
+
+Sketch:
+
+1. **[Human/dom0]** Create a **second qube** on the same template
+   (`debian-13-xfce-net`) with the same properties as Part A step 5. Prefer
+   a fresh qube and a separate sign-in. Cloning `sys-vpn-id0-proton-gui`
+   (a known community pattern) also copies its session; if you clone, remove
+   the GUI's autostart symlink and its Auto connect setting, since only one
+   of GUI/CLI can run per qube.
+2. **[Human]** `protonvpn signin <username>`, then `protonvpn connect --country XX`.
+3. **[Human]** Autostart (untested): an entry in `~/.config/autostart` whose
+   `Exec` is `protonvpn connect --country XX`.
+4. **[Agent/qrexec drafts, Human/dom0 installs]** The same kill-switch
+   backstop as Part B step 4.
+5. **[Human/dom0]** Point a test AppVM's `netvm` at it.
+
+Open questions to settle first: does `protonvpn` work when launched through
+`qvm-run` (does it get the session's D-Bus environment)? Does a clone share
+the GUI's login session? If both work, a dom0 one-liner such as
+`qvm-run <qube> 'protonvpn connect --country DE'` switches exits without
+opening a window.
+
+## Considered and not adopted
+
+- **DispVM for the GUI qube.** A disposable is stateless and loses changes
+  on shutdown; persistent changes belong in the disposable template. For
+  this app the login session is the state, so each disposable would need a
+  copy of the session baked into the template. Disposables that refresh
+  tokens would leave the template's copy stale (not tested whether Proton
+  rotates refresh tokens). Clones of an AppVM already share one template, so
+  a DispVM would not reduce template drift.
+- **One DispVM per country with a static WireGuard config each.** Stateless
+  suits this, and one connection per qube avoids the problems in
+  `fix-silent-reconnect.md`. Costs: stale configs, key in the template. Not
+  pursued for now. The one-ProxyVM-per-exit idea is provider-agnostic;
+  Mullvad's CLI logs in with an account number and has auto-connect and a
+  lockdown mode, but its account number is a long-lived secret on disk and
+  its Qubes specifics were not checked.
+- **Proton CLI as the default qube.** See option 2 above.
+- **A status watchdog.** Declined: fail-closed plus manual reconnect.
 
 ## Verification
 
-- From the target AppVM: `curl https://ifconfig.me` shows the IP of the
-  country selected in the Proton app.
-- Kill switch: disconnect in the Proton app and confirm the target AppVM
-  loses connectivity rather than falling back to clearnet. Repeat after
-  rebooting the qube, before connecting.
-- Backstop: step 9e shows `policy drop`, and downstream traffic works while
-  connected, on every server and protocol you use. To test it alone, turn
-  the app's kill switch off with the tunnel disconnected, confirm the
-  downstream AppVM still has no connectivity, then turn it back on (this
-  briefly weakens a control: a human decision).
-- Confirm this qube's own entry in the Qubes network widget shows a
-  single managed connection, not a flood of pre-imported server entries —
-  this is expected behavior for the modern official app (it reuses one
-  connection object per selection) rather than the older, unofficial
-  community import scripts that pre-populate hundreds of static profiles.
-
-## Kill switch notes
-
-**Standard vs Advanced (step 8).** Standard engages only when an
-established connection drops by accident; it does nothing during a
-deliberate disconnect or before the first connect. Advanced blocks all
-traffic outside the VPN interface at all times and persists across
-restarts. This qube exists only to carry downstream traffic through the
-tunnel, so Advanced costs nothing. If the qube itself needs the network
-while disconnected (e.g. a re-login), turn the kill switch off
-deliberately, then back on. Advanced is incompatible with split tunneling,
-which this setup skips. Verified on this system: the app's kill switch also
-blocks forwarded downstream traffic. Sources:
-protonvpn.com/support/what-is-kill-switch,
-protonvpn.com/support/advanced-kill-switch.
-
-**NetShield (step 8; leave off).** DNS-level ad/tracker/malware blocking,
-paid plans only. Not needed for occasional one-off routing: DNS filtering
-can break sites and obscure routing problems, and downstream qubes can run
-their own blockers. Enable it only for a specific session.
-
-**Why a backstop (step 9).** The app's kill switch is enforced by the app
-inside this qube, which has a known state-tracking bug (see Known risks).
-The nftables rules load at boot before the app starts and don't depend on
-it. Same fail-closed pattern as step 6 of `vpn-proxyvm.md`, with three
-differences:
-- The app, not you, creates and names the tunnel interface, so the name is
-  read off the system (step 9b) instead of following a `qubes*` naming
-  convention. If it changes between servers or protocols, use the
-  narrowest wildcard that matches every tunnel name. Proton's kill-switch
-  `pvpn-*` connections are not the tunnel, and interface names reported
-  elsewhere (e.g. `pvpnrouteintrf0`) are unconfirmed.
-- There is no `nmcli connection up` line: the app manages the connection.
-- The reply rule accepts established traffic only toward downstream qubes
-  (`vif*`). A bare `ct state established,related accept`, as in
-  `vpn-proxyvm.md`, could pass an already-established flow out the uplink
-  if the tunnel dropped.
-
-If `<tunnel-iface>` is left unreplaced, nothing matches and all forwarding
-is dropped: fail-closed, but useless.
+- **[Human]** Cold boot: the tunnel comes up with no clicks, repeated.
+- From a target AppVM: `curl https://ifconfig.me` shows the IP of the
+  server the app connected to.
+- **[Human]** Kill switch: kill the app process (not just disconnect) and
+  confirm the target AppVM's connectivity fails outright rather than
+  falling back to clearnet. Repeat after a reboot to confirm the backstop
+  is applied.
+- **[Human]** DNS leak test from the target AppVM.
+- **[Human]** Suspend/resume and a Wi-Fi change: record what happens.
+- **[Human]** The qube's own entry in the Qubes network widget shows a single
+  managed connection, not hundreds of pre-imported profiles (expected for
+  the official app).
+- **[Human]** `qvm-ls -O NAME,NETVM` shows the intended AppVMs on this qube.
 
 ## Known risks / open questions
 
-- Proton's Linux GUI app has an open bug (as of v4.14.0) where it
-  sometimes fails to recognize its own successful connection and spins
-  indefinitely; a restart of the app may be needed to resync. Not fatal,
-  but expect occasional flakiness distinct from anything in
-  `sys-vpn-id0-proton`.
-- The tunnel interface name in step 9 must come from this system, not
-  from notes.
-- Not verified: the `vif*` reply rule in step 9. If the name is wrong,
-  connected downstream qubes lose connectivity (fail-closed), which the
-  Verification checks will show.
+- The app's connection-state bug (v4.14.0, Feb 2026); check the installed
+  version's current behavior.
+- Keyring behavior with an empty password, and cold-boot connect reliability.
+- Whether the tray icon works in Qubes.
+- Whether the app reconnects after suspend/resume or a network change.
+- The backstop syntax and hook behavior on this system, and any interaction
+  with Proton's own kill switch.
+- Recovery if Proton's kill switch is left behind (for example after
+  uninstalling the app): delete the leftover NetworkManager connections
+  whose names start with `pvpn-` (`pvpn-killswitch`,
+  `pvpn-ipv6leak-protection`, possibly `pvpn-routed-killswitch`) using
+  `nmcli connection show --active` and `nmcli connection delete <name>`.
+
+## Forward references
+
+- `vpn-proxyvm.md` — the cold-fallback ProxyVM with static WireGuard.
+- `fix-silent-reconnect.md` — shelved.
+- `agent-qube-access.md` — why this qube has no VMShell line.
+- `AGENTS.md` — dom0 boundary, no secrets, don't weaken security controls.
+- Proton docs consulted 2026-10-13: Linux GUI usage, Linux CLI usage,
+  Debian/Ubuntu install; Qubes forum guides for the Proton app; Qubes docs
+  "How to use disposables".
 
 ## Status
 
-Design proposed, not yet implemented. Update this doc once fielded.
+Design proposed, not yet implemented. Nothing here has been verified on the
+real system as the default NetVM. Unverified: all of Part B, the tray in
+Qubes, the keyring behavior, what the app stores on disk, the backstop
+syntax, and every item under "CLI qube sketch".

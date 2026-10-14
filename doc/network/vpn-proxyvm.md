@@ -1,5 +1,19 @@
 # VPN ProxyVM (`sys-vpn-id0-proton`) — Design & Configuration
 
+## Role (as of 2026-10-13): cold fallback
+
+`sys-vpn-id0-proton` is being demoted from the everyday VPN ProxyVM to a
+**cold fallback**. The default is now `sys-vpn-id0-proton-gui`, which runs
+Proton's official GUI app (see `vpn-proxyvm-gui.md`). This qube is kept for
+two reasons: static WireGuard configs are provider-independent and need no
+Proton-specific software, and it remains a working path if Proton's app
+misbehaves.
+
+As a fallback it keeps a **single connection config** and is normally shut
+down. See "Planned change: cold fallback with a single config" below. The
+rest of this doc still describes how the qube is built and is accurate for
+the current deployment.
+
 ## Context
 
 Goal: a dedicated ProxyVM that routes downstream AppVMs through a ProtonVPN
@@ -18,14 +32,20 @@ root shell via `qvm-run -u root sys-vpn-id0-proton xterm`). An agent
 with shell access (`qubes.VMShell`) has `user` only; see
 `agent-qube-access.md`.
 
-Rejected alternative: Proton's official Linux CLI. It depends on
-`gnome-keyring` / a D-Bus session bus, which never exists in an
-auto-started, loginless ProxyVM — it's effectively a headless environment
-from the CLI's point of view. It's also the wrong tool anyway: it's built
-for interactive server-switching on a desktop, and a ProxyVM is meant to
-pin to one (or a small rotating set of) static configs. Static WireGuard
-`.conf` files via NetworkManager avoid the dependency entirely and are the
-approach the Qubes community converges on for this.
+Rejected alternative: Proton's official Linux CLI **on this minimal
+template**. The CLI requires gnome-keyring and NetworkManager and is
+documented as not working on headless setups, and an auto-started,
+loginless ProxyVM on a minimal template has no desktop session or keyring.
+This reasoning does **not** carry over to full desktop templates, which
+start a desktop session at boot; the GUI qube in `vpn-proxyvm-gui.md` runs
+on one (`debian-13-xfce-net`). Static WireGuard `.conf` files via
+NetworkManager avoid the dependency entirely and fit a minimal template, and
+the Qubes community documents this approach. An earlier version of this doc
+claimed the community "converges" on it; that overstated things, since the
+Qubes forum also has a long-running guide for running the Proton app in a
+dedicated qube. The static approach has real costs: there is no load-aware
+server selection, and Proton notes that a retired server means downloading
+new config files.
 
 ## Dependency audit — why `debian-13-minimal` needs three packages, not just NetworkManager
 
@@ -99,7 +119,8 @@ Via account.proton.me → VPN → Downloads → WireGuard configuration →
 platform Linux. Generate one `.conf` per server/region desired for
 rudimentary server switching (a ProxyVM otherwise pins to whatever server
 was baked into the config at generation time — there is no live
-server-switching without multiple configs).
+server-switching without multiple configs). In the fallback role only one
+config is kept (see "Planned change" below).
 
 **Naming constraint:** keep filenames ≤15 characters, no spaces
 (`qubes-CA-1040.conf`, `qubes-CA-1048.conf`, `qubes-US-MI-19.conf`). The filename becomes the WireGuard
@@ -169,6 +190,9 @@ rather than falling back to clearnet.
 qvm-prefs <appvm-name> netvm sys-vpn-id0-proton
 ```
 
+In the fallback role, only attach an AppVM here temporarily, when the GUI
+qube is unavailable, and revert afterwards.
+
 ## Step 8 — Verification
 
 ```bash
@@ -188,6 +212,9 @@ sudo nmcli connection up qubes-CA-1040
 
 ## Server switching
 
+Applies only while more than one config is imported (the fallback keeps
+one, so this section is historical):
+
 ```bash
 sudo nmcli connection down qubes-CA-1040
 sudo nmcli connection up qubes-US-MI-19
@@ -196,12 +223,34 @@ sudo nmcli connection up qubes-US-MI-19
 Downstream AppVMs briefly lose connectivity during switchover — expected
 fail-closed behavior, not a bug.
 
+## Planned change: cold fallback with a single config
+
+Decision of 2026-10-13. **Proposed, not yet applied.**
+
+- **Keep one config:** `qubes-CA-1040`, which already has
+  `connection.autoconnect yes` per Step 5.
+- **Remove the other two** (`qubes-CA-1048`, `qubes-US-MI-19`) and their
+  `.conf` files in the qube's `$HOME`. **[Human/dom0]**, and confirm first
+  (`AGENTS.md`): `qvm-run -u root sys-vpn-id0-proton 'nmcli connection delete <name>'`.
+  The configs can be regenerated from the Proton account if needed.
+- **What this simplifies:** with a single connection, two default-route
+  tunnels cannot be active at once, and autoconnect of that one connection
+  is the intended behavior, so the problems in `fix-silent-reconnect.md`
+  do not arise. That task is **shelved** (it also edited a template shared
+  with `lan-proxy`). The exclusivity dispatcher script is not needed.
+- **Unchanged:** the `rc.local` kill switch, the `qubes*` wildcard (it still
+  matches the single name), and the template.
+- **Normal state:** shut down; no AppVM uses it as its `netvm`.
+- **Keep it viable:** a cold qube can rot unnoticed. Start it now and then,
+  confirm the tunnel comes up and `curl https://ifconfig.me` through it
+  shows a Proton IP, then shut it down. If Proton has retired the server,
+  generate a new config.
+
 ## Rejected/considered alternatives
 
-- **Proton official CLI** — depends on `gnome-keyring`/D-Bus session,
-  unavailable in a headless, auto-started ProxyVM. Also solves a problem
-  (interactive load-based server switching) that a static-config ProxyVM
-  doesn't need solved the same way.
+- **Proton official CLI on this minimal template** — see Context. Not
+  rejected in general: a Proton CLI is a candidate for experiments in a
+  separate full-template qube (`vpn-proxyvm-gui.md`, "CLI qube sketch").
 - **OpenVPN via `.ovpn` + daemon in `rc.local`** — works, used in some
   community guides, but WireGuard is simpler and better-integrated with NM
   in current templates; no reason to prefer it here.
@@ -231,14 +280,17 @@ fail-closed behavior, not a bug.
 
 ## Forward references
 
-- `fix-silent-reconnect.md` — NM autoconnect and multi-connection
-  conflict fix for this qube (exclusivity dispatcher script).
+- `vpn-proxyvm-gui.md` — the default, always-on GUI ProxyVM (Proton app),
+  its architecture options, and a sketch for CLI experiments.
+- `fix-silent-reconnect.md` — **shelved**; NM autoconnect and
+  multi-connection conflict fix (exclusivity dispatcher script), not needed
+  with a single-config fallback.
 - `agent-qube-access.md` — qrexec (`qubes.VMShell`) access for a coding
   agent to administer this qube, with SSH over qrexec as a backup.
-- `vpn-proxyvm-gui.md` — separate, on-demand GUI ProxyVM for one-off
-  country routing.
 
 ## Status
 
 Implemented and confirmed working, including kill-switch fail-closed
-behavior and multi-config server switching.
+behavior and multi-config server switching, as originally built with three
+configs. The demotion to a single-config cold fallback is **planned, not yet
+applied**.
