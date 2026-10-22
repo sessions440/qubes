@@ -1,0 +1,136 @@
+#!/bin/bash
+set -euo pipefail
+
+usage() {
+    cat << EOF
+Usage: $(basename "$0") <path-to-AppImage> [app-name]
+
+Installs and integrates an AppImage in a Qubes AppVM under \$HOME.
+Reuses bundled upstream .desktop files and hicolor icons for seamless dom0 integration.
+
+Arguments:
+  <path-to-AppImage>   Path to the downloaded .AppImage file
+  [app-name]           Optional command/folder slug (default: derived from filename)
+
+Examples:
+  $(basename "$0") ~/Downloads/OpenCode-2.1.3.AppImage opencode-desktop
+  $(basename "$0") ~/Downloads/Obsidian-1.5.8.AppImage obsidian
+EOF
+    exit 1
+}
+
+if [ "$#" -lt 1 ]; then
+    usage
+fi
+
+APPIMAGE_SRC="$1"
+if [ ! -f "$APPIMAGE_SRC" ]; then
+    echo "Error: File not found: '$APPIMAGE_SRC'" >&2
+    exit 1
+fi
+
+# Determine app name slug
+if [ "$#" -ge 2 ] && [ -n "$2" ]; then
+    APP_NAME="$2"
+else
+    # Strip extension and common version patterns (e.g. MyApp-1.2.3.AppImage -> myapp)
+    filename="$(basename "$APPIMAGE_SRC")"
+    APP_NAME="$(echo "${filename%.*}" | sed -E 's/[-_][0-9]+(\.[0-9]+)*.*$//' | tr '[:upper:]' '[:lower:]')"
+    if [ -z "$APP_NAME" ]; then
+        APP_NAME="app"
+    fi
+fi
+
+APP_DIR="$HOME/Applications"
+BIN_DIR="$HOME/.local/bin"
+DESKTOP_DIR="$HOME/.local/share/applications"
+ICON_DIR="$HOME/.local/share/icons"
+
+mkdir -p "$APP_DIR" "$BIN_DIR" "$DESKTOP_DIR" "$ICON_DIR"
+
+DEST_APPIMAGE="$APP_DIR/${APP_NAME}.AppImage"
+EXTRACT_DIR="$APP_DIR/${APP_NAME}-extracted"
+
+echo "==> Staging AppImage as $DEST_APPIMAGE"
+if [ ! -f "$DEST_APPIMAGE" ] || [ "$(realpath "$APPIMAGE_SRC")" != "$(realpath "$DEST_APPIMAGE")" ]; then
+    cp "$APPIMAGE_SRC" "$DEST_APPIMAGE"
+fi
+chmod +x "$DEST_APPIMAGE"
+
+echo "==> Extracting AppImage payload to $EXTRACT_DIR"
+TEMP_EXTRACT="$(mktemp -d /tmp/appimage-extract-XXXXXX)"
+(
+    cd "$TEMP_EXTRACT"
+    "$DEST_APPIMAGE" --appimage-extract >/dev/null
+)
+
+rm -rf "$EXTRACT_DIR"
+mv "$TEMP_EXTRACT/squashfs-root" "$EXTRACT_DIR"
+rm -rf "$TEMP_EXTRACT"
+
+# Create wrapper script in ~/.local/bin
+WRAPPER="$BIN_DIR/$APP_NAME"
+echo "==> Creating launcher wrapper at $WRAPPER"
+cat > "$WRAPPER" << EOF
+#!/bin/bash
+exec "$EXTRACT_DIR/AppRun" "\$@"
+EOF
+chmod +x "$WRAPPER"
+
+# Integrate icons
+echo "==> Integrating application icons"
+if [ -d "$EXTRACT_DIR/usr/share/icons/hicolor" ]; then
+    cp -r "$EXTRACT_DIR/usr/share/icons/hicolor" "$ICON_DIR/"
+fi
+
+# Locate the desktop file (ensure it is a valid text file containing [Desktop Entry], not an ELF binary)
+DESKTOP_FILE="$(find "$EXTRACT_DIR" -maxdepth 1 -type f -name "*.desktop" -exec grep -l '^\[Desktop Entry\]' {} + 2>/dev/null | head -n 1 || true)"
+if [ -z "$DESKTOP_FILE" ] && [ -d "$EXTRACT_DIR/usr/share/applications" ]; then
+    DESKTOP_FILE="$(find "$EXTRACT_DIR/usr/share/applications" -maxdepth 1 -type f -name "*.desktop" -exec grep -l '^\[Desktop Entry\]' {} + 2>/dev/null | head -n 1 || true)"
+fi
+
+if [ -n "$DESKTOP_FILE" ]; then
+    DESKTOP_BASENAME="$(basename "$DESKTOP_FILE")"
+    TARGET_DESKTOP="$DESKTOP_DIR/$DESKTOP_BASENAME"
+    echo "==> Installing desktop entry: $DESKTOP_BASENAME"
+    cp "$DESKTOP_FILE" "$TARGET_DESKTOP"
+
+    # If the icon wasn't in usr/share/icons/hicolor, check the Icon key or root icons
+    ICON_NAME="$(grep -E '^Icon=' "$TARGET_DESKTOP" | head -n 1 | cut -d= -f2- || true)"
+    if [ -n "$ICON_NAME" ]; then
+        # Check if an icon matching ICON_NAME is in the root of the extract dir
+        ROOT_ICON="$(find "$EXTRACT_DIR" -maxdepth 1 \( -name "${ICON_NAME}.png" -o -name "${ICON_NAME}.svg" \) | head -n 1)"
+        if [ -n "$ROOT_ICON" ]; then
+            mkdir -p "$ICON_DIR/hicolor/256x256/apps"
+            cp "$ROOT_ICON" "$ICON_DIR/hicolor/256x256/apps/"
+        elif [ -f "$EXTRACT_DIR/.DirIcon" ] && [ ! -f "$ICON_DIR/hicolor/256x256/apps/${ICON_NAME}.png" ]; then
+            mkdir -p "$ICON_DIR/hicolor/256x256/apps"
+            cp -L "$EXTRACT_DIR/.DirIcon" "$ICON_DIR/hicolor/256x256/apps/${ICON_NAME}.png"
+        fi
+    fi
+
+    # Update Exec= to point to our wrapper script, preserving flags and arguments (%U, --no-sandbox, etc.)
+    # Replace first executable token after Exec=
+    sed -i -E "s|^Exec=[^ ]+|Exec=$WRAPPER|" "$TARGET_DESKTOP"
+else
+    echo "Warning: No .desktop file found in AppImage payload." >&2
+fi
+
+# Refresh desktop & icon databases
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "$DESKTOP_DIR"
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -f "$ICON_DIR/hicolor" 2>/dev/null || true
+fi
+
+echo ""
+echo "Installation complete!"
+echo "  - Command: $WRAPPER"
+if [ -n "${TARGET_DESKTOP:-}" ]; then
+    echo "  - Desktop Entry: $TARGET_DESKTOP"
+fi
+echo ""
+echo "Next step in dom0:"
+echo "  Qube Manager -> $(qubesdb-read /name 2>/dev/null || echo '<qube>') -> Applications tab -> Refresh Applications"
+echo "  Then select the app to add it to your dom0 application menu."

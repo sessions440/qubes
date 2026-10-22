@@ -7,170 +7,196 @@ entirely under `$HOME`, with no changes to the underlying TemplateVM and no `apt
 install of anything. Consistent with the minimal-footprint discipline applied
 elsewhere in this environment (see `pass-install.md`, `opencode-install.md`).
 
-This is the generic pattern for any single-file AppImage app (Obsidian, Jan, etc.).
-App-specific quirks get their own doc; this one covers the common path.
+Every standard AppImage is an AppDir filesystem containing:
+- An upstream-tested `.desktop` file at the root.
+- Multi-resolution application icons in `usr/share/icons/hicolor/` (or root `.DirIcon` / `*.png`).
+- Window manager mapping (`StartupWMClass`), file associations, and MIME types.
 
-## Step 1 — Place the file
+Reusing these bundled assets instead of hand-crafting `.desktop` files ensures
+accurate icon display in dom0, correct window grouping on taskbars, and zero
+procedural friction.
+
+---
+
+## Method A — Automated (`appimage-install` helper)
+
+The convenience script `vendor/appimage-install/appimage-install` handles staging,
+extraction, icon promotion, wrapper creation, and desktop integration in a single command.
+
+`[Agent/qrexec]` or `[Human]` inside the AppVM:
 
 ```bash
-mkdir -p ~/.local/bin ~/Applications
+# If not already on PATH:
+mkdir -p ~/.local/bin
+ln -sf ~/qubes/vendor/appimage-install/appimage-install ~/.local/bin/appimage-install
+
+# Install or update an AppImage:
+appimage-install ~/Downloads/MyApp-1.2.3.AppImage myapp
+```
+
+Arguments:
+- `$1`: Path to the downloaded `.AppImage` file.
+- `$2` *(optional)*: Command slug used for the binary wrapper (`~/.local/bin/myapp`),
+  payload directory (`~/Applications/myapp-extracted`), and AppImage staging.
+
+---
+
+## Method B — Manual Streamlined Steps
+
+If installing manually without the helper script, follow these steps to extract and
+wire up the bundled assets.
+
+### Step 1 — Stage and extract the AppImage
+
+`[Agent/qrexec]` or `[Human]`:
+
+```bash
+mkdir -p ~/Applications ~/.local/bin ~/.local/share/applications ~/.local/share/icons
 mv ~/Downloads/MyApp-1.2.3.AppImage ~/Applications/myapp.AppImage
 chmod +x ~/Applications/myapp.AppImage
-```
 
-Two conventions worth keeping:
-
-- Store the AppImage itself in `~/Applications/`, not `~/.local/bin/` — it's a
-  payload, not a script you'd expect on `$PATH` directly.
-- Rename to a stable, version-free filename (`myapp.AppImage`). Upstream release
-  filenames carry version strings; a stable name means the `.desktop` file and any
-  wrapper script never need to change across updates.
-
-Everything here lives under `$HOME`, so it persists across AppVM reboots without
-touching the TemplateVM — same pattern as the `pass` and OpenCode installs.
-
-## Step 2 — FUSE: know before you run
-
-AppImages normally mount themselves via FUSE. **`debian-13` templates do not ship
-FUSE by default; `whonix-workstation-18` does.** This is the main fork in the road:
-
-| Template | FUSE present | Action needed |
-|---|---|---|
-| `whonix-workstation-18` | yes | run directly, no extra step |
-| `debian-13` (and derivatives) | no | extract first, or run with `--appimage-extract-and-run` |
-
-Newer AppImages bundle FUSE 3 statically and may run on `debian-13` with no extra
-step regardless — try running it directly first (Step 3) and only fall back to
-extraction if you see `dlopen(): error loading libfuse.so.2` or similar.
-
-Do **not** install `libfuse2`/`fuse` into the template or via a per-boot `apt`
-hook to work around this — that's the wrong tradeoff here.
-The extraction path below is the supported, no-template-touch answer.
-
-## Step 3 — Run it
-
-**If FUSE is present (Whonix), or the AppImage doesn't need it:**
-
-```bash
-~/Applications/myapp.AppImage
-```
-
-Nothing further needed — the file runs and self-mounts as designed.
-
-**If FUSE is absent (`debian-13`) and the app requires it, extract once:**
-
-```bash
+# Extract payload once to avoid FUSE dependencies and startup extraction churn:
+rm -rf ~/Applications/myapp-extracted
 cd ~/Applications
 ./myapp.AppImage --appimage-extract
 mv squashfs-root myapp-extracted
 ```
 
-Then launch via the extracted `AppRun`:
+### Step 2 — Create the launcher wrapper
 
-```bash
-~/Applications/myapp-extracted/AppRun
-```
-
-This produces a small wrapper script so the launch command stays stable regardless
-of which path you're on:
+`[Agent/qrexec]` or `[Human]`:
 
 ```bash
 cat > ~/.local/bin/myapp << 'EOF'
 #!/bin/bash
-exec ~/Applications/myapp-extracted/AppRun "$@"
+exec "$HOME/Applications/myapp-extracted/AppRun" "$@"
 EOF
 chmod +x ~/.local/bin/myapp
 ```
 
-(If instead you're on the direct-run path, point this wrapper at
-`~/Applications/myapp.AppImage` instead of an `AppRun` path.)
+### Step 3 — Install icons
 
-### Why extract-and-keep, not `--appimage-extract-and-run` every time
+`[Agent/qrexec]` or `[Human]`:
 
-`--appimage-extract-and-run` re-extracts to a fresh temp directory on *every*
-launch — correct for a one-off/build-script context, wasteful for an app you'll
-launch repeatedly. Extracting once into a persistent `~/Applications/myapp-extracted/`
-and launching `AppRun` directly gets the same FUSE-free behavior with instant
-startup thereafter. Reserve `--appimage-extract-and-run` for apps you run rarely
-enough that the disk churn doesn't matter.
-
-## Step 4 — Desktop integration
-
-Icon first — extract it so the `.desktop` file has something to point at:
-
-- If you extracted in Step 3, the icon is already sitting in
-  `~/Applications/myapp-extracted/` (usually `.DirIcon` or a `myapp.png` at the
-  top level).
-- If you're running the AppImage directly (no extraction), pull the icon out
-  without a full extract:
-  ```bash
-  cd /tmp
-  ~/Applications/myapp.AppImage --appimage-extract '*.png' '*.svg' >/dev/null
-  mkdir -p ~/.local/share/icons/hicolor/256x256/apps
-  cp squashfs-root/myapp.png ~/.local/share/icons/hicolor/256x256/apps/myapp.png
-  rm -rf squashfs-root
-  ```
-
-Then the `.desktop` file:
-
-```ini
-[Desktop Entry]
-Name=MyApp
-Exec=/home/user/.local/bin/myapp %U
-Icon=myapp
-Type=Application
-Categories=Utility;
-```
-
-Notes:
-
-- `Exec` should point at the wrapper script from Step 3, not the raw
-  `.AppImage`/`AppRun` path — that's the whole reason the wrapper exists: one
-  stable target regardless of which FUSE path you took.
-- `Icon=myapp` refers to the icon by name (matches the filename dropped into
-  `~/.local/share/icons/...`), not a full path — lets the icon theme resolve it
-  at whatever resolution is needed.
-- `%U` passes through file/URL args from the file manager or a URL handler (e.g.
-  double-clicking a `.md` file associated with Obsidian launches
-  `myapp %U /path/to/file.md`). Omit it for apps that never take a file argument.
-
-Save as `~/.local/share/applications/myapp.desktop`, then refresh:
+If the AppImage bundles standard hicolor icons (most Electron and Qt apps):
 
 ```bash
-update-desktop-database ~/.local/share/applications/
+if [ -d ~/Applications/myapp-extracted/usr/share/icons/hicolor ]; then
+    cp -r ~/Applications/myapp-extracted/usr/share/icons/hicolor ~/.local/share/icons/
+fi
 ```
 
-## Step 5 — Add to the Qubes app menu
+If the AppImage only provides a root `.DirIcon` or `myapp.png`:
 
-In dom0: **Qube Manager → (select the AppVM) → Applications tab → Refresh
-Applications**, then select `MyApp` from the list to pin it into the qube's menu
-entry in dom0's app launcher.
+```bash
+mkdir -p ~/.local/share/icons/hicolor/256x256/apps
+cp ~/Applications/myapp-extracted/*.png ~/.local/share/icons/hicolor/256x256/apps/ 2>/dev/null || true
+```
 
-If it doesn't show up after refresh, confirm the `.desktop` file has `Type=Application`
-and no syntax errors (`desktop-file-validate ~/.local/share/applications/myapp.desktop`
-inside the AppVM), then refresh again.
+### Step 4 — Install and patch the bundled `.desktop` file
+
+`[Agent/qrexec]` or `[Human]`:
+
+Copy the upstream `.desktop` file and point its `Exec=` command to the wrapper,
+preserving all arguments and flags (e.g. `--no-sandbox %U`):
+
+```bash
+# Locate upstream desktop entry:
+DESKTOP_SRC="$(find ~/Applications/myapp-extracted -maxdepth 1 -type f -name "*.desktop" -exec grep -l '^\[Desktop Entry\]' {} + | head -n 1)"
+cp "$DESKTOP_SRC" ~/.local/share/applications/
+
+# Patch Exec line to use ~/.local/bin/myapp:
+DESKTOP_DEST=~/.local/share/applications/"$(basename "$DESKTOP_SRC")"
+sed -i -E 's|^Exec=[^ ]+|Exec=/home/user/.local/bin/myapp|' "$DESKTOP_DEST"
+
+# Refresh desktop & icon caches:
+update-desktop-database ~/.local/share/applications/
+gtk-update-icon-cache -f ~/.local/share/icons/hicolor/ 2>/dev/null || true
+```
+
+---
+
+## Step 5 — Add to the Qubes app menu in dom0
+
+`[Human/dom0]`:
+
+1. Open **Qube Manager** → select the AppVM → **Qube Settings** → **Applications** tab.
+2. Click **Refresh Applications**.
+3. Select your application from the left column and move it to the right column to pin it.
+
+Alternatively, refresh via dom0 terminal:
+
+```bash
+qvm-sync-appmenus <qube-name>
+```
+
+---
+
+## Verification
+
+`[Agent/qrexec]` or `[Human]` inside the AppVM:
+
+1. **Verify desktop syntax:**
+   ```bash
+   desktop-file-validate ~/.local/share/applications/*.desktop
+   ```
+2. **Verify dom0 icon resolution:**
+   Test that Qubes' internal icon lookup resolves the icon:
+   ```bash
+   /usr/lib/qubes/xdg-icon <icon-name> 128
+   ```
+   *(Replace `<icon-name>` with the value of `Icon=` from the `.desktop` file, e.g. `ai.opencode.desktop`)*.
+3. **Verify wrapper execution:**
+   ```bash
+   test -x ~/.local/bin/myapp && echo "Wrapper is executable"
+   ```
+   *(Note: For graphical Electron/desktop apps, running `myapp` directly in a shell opens the full GUI window. Test interactive launch from the desktop launcher or terminal as a human; avoid invoking GUI binaries in non-interactive/automated agent sessions as they will block until the window is closed).*
+
+---
 
 ## Updates
 
-There is no update mechanism here — deliberately. This whole approach trades
-auto-updates for zero template footprint. To update:
+To update an application:
 
-```bash
-# download the new release, then:
-mv ~/Downloads/MyApp-1.3.0.AppImage ~/Applications/myapp.AppImage
-chmod +x ~/Applications/myapp.AppImage
+- **With helper script:**
+  ```bash
+  appimage-install ~/Downloads/MyApp-1.3.0.AppImage myapp
+  ```
+- **Manually:**
+  Replace `~/Applications/myapp.AppImage`, re-extract to `~/Applications/myapp-extracted`,
+  and refresh icons/desktop files. The wrapper `~/.local/bin/myapp` and dom0 menu
+  configuration remain unchanged.
 
-# if you're on the extraction path, re-extract:
-rm -rf ~/Applications/myapp-extracted
-./myapp.AppImage --appimage-extract
-mv squashfs-root myapp-extracted
+---
+
+## Rationale & Gotchas
+
+### Why FUSE matters (`debian-13` vs `whonix-workstation-18`)
+
+AppImages mount via FUSE at runtime. `whonix-workstation-18` includes `libfuse2`, but
+Debian 13 (Trixie) ships only `libfuse3` by default. Running traditional Type 2 AppImages
+directly on Debian 13 fails with:
 ```
+dlopen(): error loading libfuse.so.2
+```
+Do **not** install `libfuse2` into the template or via root hooks. Extracting once to
+`~/Applications/myapp-extracted/` completely avoids FUSE requirements, eliminates
+startup extraction lag, and keeps the TemplateVM pristine.
 
-Because the wrapper script, `.desktop` file, and icon all reference the stable
-`myapp`/`myapp.AppImage` names rather than versioned filenames, none of them need
-to change on update — only the binary/extracted tree underneath gets replaced.
+### Why you should never write `.desktop` files by hand
+
+Hand-crafted desktop files invariably miss key metadata:
+1. **Icon name mismatches:** Packagers name icons using reverse-DNS or AppStream IDs
+   (e.g. `ai.opencode.desktop.png`), not simple names like `myapp.png`. Hand-written
+   names cause missing icons in dom0 and application menus.
+2. **`StartupWMClass`:** Crucial for XFCE, GNOME, and KDE. Without this, window managers
+   cannot match running windows to the desktop launcher, breaking panel icons and window grouping.
+3. **MIME & URL schemes:** Misses registered URI handlers (e.g. `x-scheme-handler/opencode;`)
+   needed for web browser integrations or OAuth callbacks.
+
+---
 
 ## Status
 
-Confirmed working for both the direct-run (Whonix) and extract (`debian-13`)
-paths, including desktop menu integration in dom0.
+Confirmed working on `debian-13-xfce` (`id0-agents`) using OpenCode Desktop AppImage,
+including icon resolution via `/usr/lib/qubes/xdg-icon` and dom0 application menu sync.
