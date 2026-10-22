@@ -1,56 +1,73 @@
-# User-Space AppImage Installer for Qubes OS (`appimage-install`)
+# Qubes OS AppImage Installer (`appimage-install`)
 
 ## Goal
-Install, integrate, and update arbitrary AppImages entirely within user space (`$HOME`) in a Qubes AppVM, with zero modifications to the underlying TemplateVM, full persistence across VM reboots, and automatic desktop and icon integration for dom0 application menus.
+Install, integrate, and update arbitrary AppImages either in an individual AppVM (user space, under `$HOME`) or system-wide across all derived AppVMs via a TemplateVM (under `/opt` and `/usr`). Reuses bundled upstream `.desktop` entries, hicolor icons, and `StartupWMClass` metadata for seamless dom0 application menu and window manager integration.
 
 ## Context
 
-In Qubes OS:
-1. **Template immutability:** Applications installed inside an AppVM should ideally avoid modifying the root filesystem or TemplateVM so that templates remain clean and generic.
-2. **FUSE availability:** Debian 13 (Trixie) does not ship `libfuse2` by default (only `libfuse3`). Standard Type 2 AppImages fail to launch directly unless extracted or supplied with `libfuse.so.2`. Extracting once to a persistent folder avoids FUSE issues and startup extraction churn.
-3. **AppDir specification:** Upstream AppImages already bundle an official `.desktop` entry, application icons (`usr/share/icons/hicolor/...` or root `.DirIcon`), and window manager classes (`StartupWMClass`). Hand-rolling `.desktop` files frequently results in missing icons, broken window grouping, or wrong MIME associations.
+In Qubes OS, AppImages can be installed in two distinct scopes:
 
-`appimage-install` automates this entire extraction and desktop integration workflow.
+1. **AppVM (User space):**
+   - Installed entirely under `$HOME` (`~/Applications/`, `~/.local/bin/`, `~/.local/share/`).
+   - Requires no root privilege and leaves the TemplateVM completely untouched.
+   - Ideal for single-qube applications.
+
+2. **TemplateVM (System-wide):**
+   - Software must live in the root filesystem (`/opt/`, `/usr/local/bin/`, `/usr/share/`).
+   - **Why `/home` does not work in a TemplateVM:** In Qubes OS, `/home/user/` in a TemplateVM is *never* inherited by AppVMs. AppVMs have private `/rw/home/user/` filesystems. Only the TemplateVM's root filesystem (`/`) is mounted read-only into derived AppVMs.
+   - **Permissions:** Root extraction of AppImages preserves permissions that may prevent non-root `user` in derived AppVMs from reading or executing files. The script automatically sets `chmod -R a+rX`.
+   - **Network isolation:** TemplateVMs do not have a NetVM by default. The cleanest workflow is to download the AppImage in an AppVM, then transfer it into the TemplateVM via `qvm-copy`.
 
 ## Usage
 
 ```bash
+# AppVM (User Space):
 appimage-install <path-to-AppImage> [app-name]
+
+# TemplateVM (System-wide):
+sudo appimage-install --system <path-to-AppImage> [app-name]
 ```
 
 ### Examples
 
-Install OpenCode Desktop:
+**Install in an AppVM (User space):**
 ```bash
-./appimage-install ~/Downloads/OpenCode-2.1.3.AppImage opencode-desktop
+appimage-install ~/Downloads/OpenCode-2.1.3.AppImage opencode-desktop
 ```
 
-Install Obsidian:
+**Install in a TemplateVM (System-wide):**
 ```bash
-./appimage-install ~/Downloads/Obsidian-1.5.8.AppImage obsidian
+sudo appimage-install --system ~/QubesIncoming/work/Obsidian-1.5.8.AppImage obsidian
 ```
 
 ### Updating an Application
 
-To update an existing app, simply run `appimage-install` pointing to the new AppImage:
-```bash
-./appimage-install ~/Downloads/Obsidian-1.6.0.AppImage obsidian
-```
-The script replaces the extracted payload, refreshes desktop files and icons, and keeps the wrapper in `~/.local/bin/obsidian` intact.
+To update an existing app, re-run `appimage-install` pointing to the new release file. The payload is re-extracted, desktop files and icons are refreshed, and existing command wrappers and menu shortcuts remain valid.
 
 ## What It Does
 
-1. **Stages the binary:** Saves the AppImage to `~/Applications/<app-name>.AppImage` as an executable payload.
-2. **Extracts payload:** Extracts the SquashFS root to `~/Applications/<app-name>-extracted/` so it runs immediately without FUSE.
-3. **Creates a CLI wrapper:** Drops an executable launcher script in `~/.local/bin/<app-name>` pointing to the extracted `AppRun`.
-4. **Installs icons:** Copies upstream `usr/share/icons/hicolor/` to `~/.local/share/icons/hicolor/` (or falls back to extracting the root `.DirIcon`/PNG), ensuring dom0 icon synchronizers find the icon at all resolutions.
-5. **Installs desktop entry:** Copies the bundled upstream `*.desktop` entry to `~/.local/share/applications/` and points `Exec=` to the `~/.local/bin/<app-name>` wrapper while preserving any flags (e.g. `--no-sandbox %U`).
-6. **Refreshes caches:** Updates `update-desktop-database` and `gtk-update-icon-cache`.
+| Step | User Mode (AppVM) | System Mode (`--system`, TemplateVM) |
+|---|---|---|
+| **Payload** | `~/Applications/<app>-extracted/` | `/opt/<app>/` |
+| **Wrapper** | `~/.local/bin/<app>` | `/usr/local/bin/<app>` |
+| **Desktop Entry** | `~/.local/share/applications/` | `/usr/share/applications/` |
+| **Icons** | `~/.local/share/icons/hicolor/` | `/usr/share/icons/hicolor/` |
+| **Permissions** | User permissions | `chmod -R a+rX` for global read/execute |
+| **Root required?** | No | Yes (`sudo`) |
 
 ## dom0 Integration
 
-After running `appimage-install` in the AppVM:
+### If installed in an AppVM:
 1. Open **Qube Manager** in dom0.
-2. Select the AppVM and open **Qube Settings** → **Applications** tab.
-3. Click **Refresh Applications**.
-4. Select the newly installed application and move it to the right pane to pin it to your desktop menu.
+2. Select the AppVM → **Qube Settings** → **Applications** tab.
+3. Click **Refresh Applications**, select the app, and move it to the right pane.
+
+### If installed in a TemplateVM:
+1. Shut down the TemplateVM: `qvm-shutdown <template>`
+2. Sync template appmenus in dom0: `qvm-sync-appmenus <template>`
+3. In any derived AppVM: Open **Qube Settings** → **Applications** tab → **Refresh Applications**, and add the app to the menu.
+
+## Status
+
+- **AppVM (user space):** Confirmed working on `debian-13-xfce` (`id0-agents`).
+- **TemplateVM (`--system` mode):** Design proposed, not yet field-tested in a live TemplateVM.
