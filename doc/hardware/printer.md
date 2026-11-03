@@ -119,6 +119,34 @@ This is a standard upstream notice from OpenPrinting indicating that future majo
 ### USB Device URI
 The URI `usb://Brother/HL-L2320D%20series?serial=...` includes the hardware serial number. If you replace the physical printer, query the new URI in an AppVM with `sudo lpinfo -v` and update the queue.
 
+### Paper Size Defaults and PDF Documents
+PDF documents contain internal page boundary definitions (`/MediaBox`). Modern browsers (including Brave) and PDF viewers inspect the document's dimensions and will automatically set the print dialog's paper size to match the PDF's native size (for example, switching to A4 for a European document, or Letter for a US document). Setting the CUPS queue default determines the fallback paper size for web pages, text files, and documents that do not specify a page geometry.
+
+To inspect, change, or remove paper size defaults on an already-configured printer:
+
+1. **Check current options**:
+   ```bash
+   lpoptions -p Brother_HL-L2320D -l | grep PageSize
+   ```
+2. **Change the system-wide default** (in the template or an AppVM with root):
+   ```bash
+   sudo lpadmin -p Brother_HL-L2320D -o PageSize=Letter    # or Legal, A4
+   ```
+3. **Change the user-specific default** (inside any AppVM, saved to `~/.cups/lpoptions` without needing root):
+   ```bash
+   lpoptions -p Brother_HL-L2320D -o PageSize=Letter
+   ```
+4. **Remove / reset the option override**:
+   - System-wide:
+     ```bash
+     sudo lpadmin -p Brother_HL-L2320D -R PageSize-default
+     ```
+   - User-specific:
+     ```bash
+     lpoptions -p Brother_HL-L2320D -r PageSize         # remove PageSize override
+     lpoptions -x Brother_HL-L2320D                      # clear all user overrides
+     ```
+
 ---
 
 ## Alternative Setups
