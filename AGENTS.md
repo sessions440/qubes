@@ -70,6 +70,15 @@ that assumes an agent will run `qvm-*` commands or open a template shell
 directly. If a task requires a dom0-level action, the doc says so and
 stops there for a human — it does not look for a workaround.
 
+One narrow carve-out: a human may let the agent qube call a short, fixed
+list of Admin API services over qrexec (start, shut down and read the
+state of named targets; create disposables from one named disposable
+template), through dom0 policy lines that name exact source and target
+qubes. That is not dom0 access: the agent gets no dom0 shell, runs no
+`qvm-*` in dom0, and any call outside the list is refused. The list and
+its rationale are in `doc/agents/agent-qube-access.md`. Widening it is a
+human decision in dom0.
+
 ### Secrets never enter this repo
 
 No private keys, WireGuard `.conf` files (they embed the private key),

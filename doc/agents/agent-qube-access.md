@@ -17,8 +17,9 @@ The transport is **qrexec**, Qubes' inter-qube RPC, not IP. Two services are doc
 - **`qubes.ConnectTCP` + SSH** (backup): a TCP pipe to the target's sshd, for when real SSH
   features are needed (`scp`, `sftp`, TTY, SSH-based tooling).
 
-This replaces the earlier IP-based design (SSH to the agent qube's upstream netvm plus a
-`custom-input` firewall rule). See "Considered and not adopted".
+Optionally, a short allow-list of Admin API calls (`admin.vm.*`) lets the agent start and stop
+named targets and spin up disposables, still without dom0 access. See "Lifecycle and
+disposables".
 
 ## Role tags
 
@@ -33,7 +34,8 @@ This replaces the earlier IP-based design (SSH to the agent qube's upstream netv
 ## Design decisions
 
 - **dom0 stays off the table.** Same rationale as `AGENTS.md`: an agent with `qvm-*` access
-  controls the whole machine.
+  controls the whole machine. The one carve-out is the fixed Admin API allow-list under
+  "Lifecycle and disposables", scoped by policy to exact qube names.
 - **qrexec instead of IP.** dom0 policy is the one place that says which qube may call which
   service on which target. No per-qube firewall rules, no netvm swap, and it works for any
   target regardless of network topology (sibling, upstream, no netvm). The target sees the
@@ -68,12 +70,10 @@ This replaces the earlier IP-based design (SSH to the agent qube's upstream netv
 | Item | Where | Needed for |
 |---|---|---|
 | `qubes.VMShell`, `qubes.VMRootShell` services | target (ship with the Qubes core agent) | preferred path; present in a `debian-13-minimal-net`-based qube (verified) |
-| `qrexec-client-vm` | agent qube | both paths (verified) |
+| `qrexec-client-vm` | agent qube | all paths (verified) |
 | `openssh-server` | target's template | **backup path only** |
 | `openssh-client` | agent qube | backup path only |
-
-Consequence: if the backup path is not used, `openssh-server` can be purged from templates
-where it was installed only for the earlier design (see "Cleanup").
+| `admin.vm.*` services | dom0 (built in) | lifecycle and disposables; nothing to install in the target or the agent qube |
 
 ## Setup: preferred path (VMShell)
 
@@ -146,6 +146,92 @@ where it was installed only for the earlier design (see "Cleanup").
   scope), and the community dom0-prompt guide for sudo (the Qubes docs say not to rely on it
   for extra security).
 
+## Lifecycle and disposables (Admin API)
+
+Optional. Lets the agent restart a target, or run work in a throwaway qube, without a dom0
+shell. Admin API calls are qrexec services answered by dom0; a policy line allows or refuses
+each one like any other service. Scope and the calls left out: "Why this scope" below.
+
+### Start and stop a target
+
+1. **[Human/dom0]** Add to `30-user-agents.policy`, one block per target, exact names:
+   ```
+   admin.vm.Start         *  id0-agents  sys-vpn-id0-proton  allow target=dom0
+   admin.vm.Shutdown      *  id0-agents  sys-vpn-id0-proton  allow target=dom0
+   admin.vm.CurrentState  *  id0-agents  sys-vpn-id0-proton  allow target=dom0
+   ```
+   The call's destination is the qube being managed; `target=dom0` makes dom0 answer it.
+
+2. **[Agent/qrexec]** Restart:
+   ```bash
+   t=sys-vpn-id0-proton
+   qrexec-client-vm $t admin.vm.Shutdown </dev/null | tr '\0' ' '
+   until qrexec-client-vm $t admin.vm.CurrentState </dev/null | tr '\0' ' ' | grep -q 'power_state=Halted'; do sleep 2; done
+   qrexec-client-vm $t admin.vm.Start </dev/null | tr '\0' ' '
+   ```
+   A success reply begins with `0`; an error begins with `2` and carries the exception text.
+   If the target provides network (a ProxyVM), downstream qubes lose connectivity while it
+   restarts: ask the human first.
+
+### Disposables
+
+**One-shot (preferred).** Each call runs in a fresh disposable, destroyed afterwards. No Admin
+API call is involved.
+
+1. **[Human/dom0]** Create a disposable template once. No template change is needed. Every
+   disposable inherits its network, so set that deliberately:
+   ```bash
+   qvm-create --class AppVM --template <template> --label <label> --prop template_for_dispvms=True <agent-dvm>
+   qvm-prefs <agent-dvm> netvm ""
+   ```
+2. **[Human/dom0]** Add to `30-user-agents.policy`:
+   ```
+   qubes.VMShell  *  id0-agents  @dispvm:<agent-dvm>  allow
+   ```
+3. **[Agent/qrexec]**
+   ```bash
+   printf '%s\n' '<command>' | qrexec-client-vm @dispvm:<agent-dvm> qubes.VMShell
+   ```
+
+**Multi-step**, when state must persist across commands (clone, then build). Needs step 1 above.
+
+1. **[Human/dom0]** Add to `30-user-agents.policy`:
+   ```
+   admin.vm.CreateDisposable  *  id0-agents  <agent-dvm>                      allow target=dom0
+   qubes.VMShell              *  id0-agents  @tag:disp-created-by-id0-agents  allow
+   admin.vm.Kill              *  id0-agents  @tag:disp-created-by-id0-agents  allow target=dom0
+   ```
+2. **[Agent/qrexec]**
+   ```bash
+   reply=$(qrexec-client-vm <agent-dvm> admin.vm.CreateDisposable </dev/null | tr -d '\0')
+   name=${reply#0}                       # for example disp1234
+   printf '%s\n' '<command>' | qrexec-client-vm $name qubes.VMShell
+   qrexec-client-vm $name admin.vm.Kill </dev/null     # when done
+   ```
+
+### Why this scope
+
+- **Start adds nothing, Shutdown adds availability only.** A `qubes.VMShell` allow line already
+  starts a halted target. Shutdown lets the agent stop a target it could already reach;
+  neither call exposes data in the target. Targets with no lifecycle lines are restarted by a
+  human in dom0.
+- **One service per call.** Allowing `admin.vm.Start` grants nothing else. Left out on
+  purpose, because each is an escalation or a persistent change: `admin.vm.Kill` on
+  persistent qubes (a hard stop can corrupt in-flight writes; add per target if a hung qube
+  needs it), `property.Set` (for example `netvm`, which reroutes a qube's traffic),
+  `firewall.*`, `feature.Set`, `tag.Set`, `volume.*` (`Import` overwrites a disk), `device.*`,
+  `Create.*`, `Remove`.
+- **Exact names.** A wildcard or `@anyvm` on an `admin.vm.*` line is a dom0-equivalent grant.
+  The one tag line covers only disposables the agent itself created: dom0 adds
+  `disp-created-by-<source>` at creation, which the caller cannot set.
+- **Disposable blast radius.** The agent can only create disposables from the named template,
+  so software and network are what that template provides, and no other qube's data is
+  reachable. `user` is root-equivalent in a disposable on a full template, which is acceptable
+  because it is thrown away. Move data through stdin/stdout or a human-approved `qvm-copy`.
+  The policy does not limit how many disposables exist at once, so a runaway loop can
+  exhaust RAM (no quota known).
+- **Prefer one-shot.** It needs no Admin API line, so no extra privilege.
+
 ## Setup: backup path (ConnectTCP + SSH)
 
 Use when a task needs `scp`/`sftp`, a TTY, port forwarding or SSH-based tooling.
@@ -205,37 +291,6 @@ Use when a task needs `scp`/`sftp`, a TTY, port forwarding or SSH-based tooling.
 
 6. **[Agent/SSH]** `ssh sys-vpn-id0-proton '<command>'`, `scp`, `sftp`.
 
-## Cleanup of the earlier IP-based design
-
-Do this after the preferred path is verified on the real target.
-
-1. **[Human/dom0]** Restore the agent qube's netvm:
-   ```bash
-   qvm-prefs id0-agents netvm <normal-netvm>
-   ```
-2. **[Human/dom0]** Remove the old inbound rule. The live rule is gone after a reboot; also
-   check for a persisted copy:
-   ```bash
-   qvm-run -p -u root sys-vpn-id0-proton 'nft list chain qubes custom-input'
-   qvm-run -p -u root sys-vpn-id0-proton 'cat /rw/config/qubes-firewall-user-script'
-   ```
-   Delete any agent-SSH accept rule found.
-3. **[Human/dom0]** Remove the agent's key from the target if the backup path is not kept:
-   ```bash
-   qvm-run -p sys-vpn-id0-proton "grep -n 'id0-agents agent key' ~/.ssh/authorized_keys"
-   ```
-   Edit out the matching line. In the agent qube, delete the `Host` block and
-   `~/.ssh/ai_homelab*` if SSH is not kept.
-4. **[Human/dom0]** Purge sshd from templates where it was installed only for this
-   (`debian-13-minimal-net`, and `debian-13-xfce-net` if it was added there):
-   ```bash
-   qvm-run -u root debian-13-minimal-net xterm
-   # in that root shell:
-   apt purge openssh-server
-   ls /etc/ssh/ssh_host_*      # confirm host keys are gone
-   ```
-   Shut the template down and restart dependent qubes. Skip this step if the backup path stays.
-
 ## Verification
 
 Per target, after adding its policy line:
@@ -253,7 +308,16 @@ Per target, after adding its policy line:
    `echo id | qrexec-client-vm <untargeted-qube> qubes.VMShell`.
 5. **[Human/dom0] + [Agent/qrexec]** Root toggle: uncomment the `VMRootShell` line, expect
    `uid=0`; comment it out, expect `Request refused`.
-6. Backup path only: **[Agent/SSH]** run `ssh <alias> 'echo out; echo err >&2; exit 3'`, then an
+6. Lifecycle, if configured: **[Agent/qrexec]** restart the target as in "Start and stop a
+   target" and confirm it answers `echo id | qrexec-client-vm <target> qubes.VMShell`. Then
+   confirm what is not granted is refused (`Request refused`):
+   `qrexec-client-vm <target> admin.vm.Kill </dev/null` and
+   `qrexec-client-vm <target> admin.vm.property.Set+netvm </dev/null`.
+7. Disposables, if configured: **[Agent/qrexec]**
+   `echo hostname | qrexec-client-vm @dispvm:<agent-dvm> qubes.VMShell` prints a `disp...`
+   name, and **[Human/dom0]** `qvm-ls` shows no leftover disposable afterwards. Another
+   template (`@dispvm:<other-dvm>`) is refused.
+8. Backup path only: **[Agent/SSH]** run `ssh <alias> 'echo out; echo err >&2; exit 3'`, then an
    `scp` round trip. **[Agent/qrexec]** `echo | qrexec-client-vm <target> qubes.ConnectTCP+80`
    must be refused.
 
@@ -270,6 +334,12 @@ Per target, after adding its policy line:
   Denials appear in dom0's journal (reported).
 - **Policy order.** First match wins, and a `*` argument line shadows specific lines below it.
 - **`allow` starts a halted target.**
+- **Admin API lines need `target=dom0`.** Without it the call is not delivered to dom0's
+  qubesd. The destination field names the qube being managed, not dom0.
+- **Admin API replies contain NUL bytes.** Pipe through `tr '\0' ' '` to read them.
+- **`qvm-*` wrappers.** If `qubes-core-admin-client` is installed in the agent qube,
+  `qvm-start` and `qvm-shutdown` probably issue further read calls (such as `admin.vm.List`)
+  that these lines do not allow. Use the raw calls. (Unverified.)
 - **Full templates.** On `debian-13-xfce`-based targets (for example `sys-vpn-id0-proton-gui`,
   which holds Proton account credentials) a `user` shell is root-equivalent through
   passwordless sudo, whichever transport is used. Decide whether the agent gets any shell
@@ -282,11 +352,13 @@ Per target, after adding its policy line:
 - **IP-based SSH to the agent qube's upstream netvm.** Works only for that one target,
   requires swapping the agent qube's netvm (routing all its traffic through the target), and
   needs a `custom-input` nftables rule in every target plus a persistence hook
-  (`/rw/config/qubes-firewall-user-script`), with open reports of that hook being ignored. The
-  Qubes docs present this as the special-situations route.
+  (`/rw/config/qubes-firewall-user-script`), with open reports of that hook being ignored. A
+  subnet-wide accept instead of a per-source rule would open port 22 to every qube attached to
+  the target. The Qubes docs present this as the special-situations route.
 - **Agent in dom0 / dom0 `qvm-run` driven by an agent.** See Design decisions.
 - **Passwordless root in shared templates.** Template-wide scope.
-- **Subnet-wide firewall accept.** Opens port 22 to any qube attached to the target.
+- **`@dispvm` with no template named.** Resolves to the source qube's `default_dispvm`, which
+  is implicit; name the template, as with "Explicit targets".
 - **`qvm-connect-tcp` local listener in the agent qube.** Any process there can use the bound
   port. The Qubes-documented permanent form is a systemd socket unit bound to `127.0.0.1`.
   `ProxyCommand` avoids the listener.
@@ -298,9 +370,11 @@ Per target, after adding its policy line:
 ## Forward references
 
 - `vpn-proxyvm.md`, `vpn-proxyvm-gui.md`: the ProxyVMs this access targets.
-- `fix-silent-reconnect.md`: first task planned for an agent over this path.
+- `lan-restricted-proxyvm.md`: a LAN-only upstream, one option for a disposable template's
+  network.
 - `AGENTS.md`: agent security rules (dom0 boundary, least privilege).
-- Qubes docs (4.3): firewall page (`ConnectTCP` section), qrexec page (policy syntax), and
+- Qubes docs (4.3): firewall page (`ConnectTCP` section), qrexec page (policy syntax and
+  `@dispvm`), Admin API page (`admin.vm.*` calls, reply format), and
   "Passwordless root access in qubes" (`doc.qubes-os.org/en/r4.3/user/security-in-qubes/vm-sudo.html`).
 
 ## Status
@@ -314,4 +388,10 @@ unset), not on the real target:
   sshd bound to `127.0.0.1` still reachable through qrexec.
 - **Not verified:** any of the above on the real `sys-vpn-id0-proton`; `rsync`; disposable
   or xfce-based targets; stdin-based file upload; harness permission matching; `ask` prompt
-  contents; sshd purge side effects.
+  contents.
+- **Not verified, all of "Lifecycle and disposables":** the policy syntax follows the Qubes
+  Admin API docs and a community guide. The `disp-created-by-<qube>` tag comes from the 2017
+  commit that added `admin.vm.CreateDisposable` and is unchecked on 4.3. Also unchecked:
+  reply parsing, the `CurrentState` output, whether `Shutdown` returns before the qube is
+  halted, `@tag:` as a policy destination for these calls, `qvm-*` wrapper behavior, and
+  automatic removal of a disposable after `Kill`.
