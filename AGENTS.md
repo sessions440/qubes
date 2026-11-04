@@ -48,6 +48,16 @@ AGENTS.md       — this file
   action; don't add procedure (backups, diffs, idempotence tricks, extra
   confirmation steps) beyond what the task needs and the Verification
   section already covers.
+- **Docs describe the current design, not its history.** A doc is a
+  reference for someone replicating this system. A replaced design, or
+  the steps to undo it, does not belong in a doc: git keeps the history.
+  Steps still pending on the live system go in `tasks/` until done, then
+  the task file is deleted. "Considered and not adopted" is for
+  alternatives a newcomer would plausibly try, a line or two each. Keep a
+  gotcha when someone following the doc as written would hit it and it is
+  non-obvious (a silent failure, or costly to diagnose); drop it when it
+  concerns a past state, a one-off, or behavior upstream docs already make
+  obvious. Status lines and "unverified" notes are not history; keep them.
 - **Verify before trusting.** Placeholder names from earlier drafts have
   drifted from real deployed names before. Before treating any existing
   doc's example names, filenames, or values as current, check them
