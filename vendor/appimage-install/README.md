@@ -1,22 +1,35 @@
 # Qubes OS AppImage Installer (`appimage-install`)
 
 ## Goal
-Install, integrate, and update arbitrary AppImages either in an individual AppVM (user space, under `$HOME`) or system-wide across all derived AppVMs via a TemplateVM (under `/opt` and `/usr`). Reuses bundled upstream `.desktop` entries, hicolor icons, and `StartupWMClass` metadata for seamless dom0 application menu and window manager integration.
+Install, integrate, update, and remove arbitrary AppImages either in an individual AppVM (user space, under `$HOME`) or system-wide across all derived AppVMs via a TemplateVM (under `/opt` and `/usr`). Reuses bundled upstream `.desktop` entries, hicolor icons, and `StartupWMClass` metadata for seamless dom0 application menu and window manager integration.
 
-## Context
+## Installing the Script
 
-In Qubes OS, AppImages can be installed in two distinct scopes:
+### In an AppVM (User Space)
+Symlink or copy the script to a directory on your `$PATH` (e.g. `~/.local/bin`):
 
-1. **AppVM (User space):**
-   - Installed entirely under `$HOME` (`~/Applications/`, `~/.local/bin/`, `~/.local/share/`).
-   - Requires no root privilege and leaves the TemplateVM completely untouched.
-   - Ideal for single-qube applications.
+```bash
+mkdir -p ~/.local/bin
+ln -sf ~/qubes/vendor/appimage-install/appimage-install ~/.local/bin/appimage-install
+```
 
-2. **TemplateVM (System-wide):**
-   - Software must live in the root filesystem (`/opt/`, `/usr/local/bin/`, `/usr/share/`).
-   - **Why `/home` does not work in a TemplateVM:** In Qubes OS, `/home/user/` in a TemplateVM is *never* inherited by AppVMs. AppVMs have private `/rw/home/user/` filesystems. Only the TemplateVM's root filesystem (`/`) is mounted read-only into derived AppVMs.
-   - **Permissions:** Root extraction of AppImages preserves permissions that may prevent non-root `user` in derived AppVMs from reading or executing files. The script automatically sets `chmod -R a+rX`.
-   - **Network isolation:** TemplateVMs do not have a NetVM by default. The cleanest workflow is to download the AppImage in an AppVM, then transfer it into the TemplateVM via `qvm-copy`.
+### In a TemplateVM (System-Wide)
+Copy the script from an AppVM into the TemplateVM:
+
+1. In the source AppVM:
+   ```bash
+   qvm-copy ~/qubes/vendor/appimage-install/appimage-install
+   ```
+2. In the TemplateVM (as root):
+   ```bash
+   sudo cp ~/QubesIncoming/<source-vm>/appimage-install /usr/local/bin/
+   sudo chmod +x /usr/local/bin/appimage-install
+   rm -rf ~/QubesIncoming/<source-vm>/
+   ```
+
+Now `appimage-install` is available system-wide in `/usr/local/bin/` across all derived AppVMs and in the TemplateVM itself.
+
+---
 
 ## Usage
 
@@ -40,20 +53,73 @@ appimage-install ~/Downloads/OpenCode-2.1.3.AppImage opencode-desktop
 sudo appimage-install --system ~/QubesIncoming/work/Obsidian-1.5.8.AppImage obsidian
 ```
 
-### Updating an Application
+---
 
-To update an existing app, re-run `appimage-install` pointing to the new release file. The payload is re-extracted, desktop files and icons are refreshed, and existing command wrappers and menu shortcuts remain valid.
+## Filesystem Layout & What It Does
 
-## What It Does
-
-| Step | User Mode (AppVM) | System Mode (`--system`, TemplateVM) |
+| Component | User Mode (AppVM) | System Mode (`--system`, TemplateVM) |
 |---|---|---|
 | **Payload** | `~/Applications/<app>-extracted/` | `/opt/<app>/` |
 | **Wrapper** | `~/.local/bin/<app>` | `/usr/local/bin/<app>` |
-| **Desktop Entry** | `~/.local/share/applications/` | `/usr/share/applications/` |
+| **Desktop Entry** | `~/.local/share/applications/<id>.desktop` | `/usr/share/applications/<id>.desktop` |
 | **Icons** | `~/.local/share/icons/hicolor/` | `/usr/share/icons/hicolor/` |
-| **Permissions** | User permissions | `chmod -R a+rX` for global read/execute |
-| **Root required?** | No | Yes (`sudo`) |
+| **Permissions** | User ownership | `chmod -R a+rX` for global read/execute |
+| **Privilege** | Unprivileged (`user`) | Root (`sudo`) |
+
+---
+
+## Updating an Application
+
+To update an existing app, re-run `appimage-install` pointing to the new release file. The payload is re-extracted, desktop files and icons are refreshed, and existing command wrappers and menu shortcuts remain valid.
+
+- **In an AppVM:**
+  ```bash
+  appimage-install ~/Downloads/MyApp-1.3.0.AppImage myapp
+  ```
+- **In a TemplateVM:**
+  ```bash
+  sudo appimage-install --system ~/QubesIncoming/<source-vm>/MyApp-1.3.0.AppImage myapp
+  ```
+  Then shut down the TemplateVM and sync appmenus in dom0 (`qvm-sync-appmenus <template>`).
+
+---
+
+## Removing / Deleting an Application
+
+Removal is a straightforward filesystem deletion of the files created during installation.
+
+### From an AppVM (User Space)
+
+1. Remove the application files:
+   ```bash
+   # Remove payload, staged AppImage, wrapper, and desktop entry:
+   rm -rf ~/Applications/<app>.AppImage ~/Applications/<app>-extracted
+   rm -f ~/.local/bin/<app>
+   rm -f ~/.local/share/applications/<app>*.desktop
+
+   # Refresh the desktop database:
+   update-desktop-database ~/.local/share/applications/
+   ```
+2. Refresh dom0 menus:
+   In dom0, open **Qube Manager** → select the AppVM → **Applications** tab → **Refresh Applications** (or run `qvm-sync-appmenus <appvm>` in dom0).
+
+### From a TemplateVM (System-Wide)
+
+1. In the TemplateVM (as root):
+   ```bash
+   sudo rm -rf /opt/<app>
+   sudo rm -f /usr/local/bin/<app>
+   sudo rm -f /usr/share/applications/<app>*.desktop
+   sudo update-desktop-database /usr/share/applications/
+   ```
+2. In dom0:
+   ```bash
+   qvm-shutdown <template>
+   qvm-sync-appmenus <template>
+   ```
+3. In derived AppVMs: Open **Qube Manager** → select the AppVM → **Applications** tab → **Refresh Applications** to remove the app from the menu.
+
+---
 
 ## dom0 Integration
 
@@ -66,6 +132,8 @@ To update an existing app, re-run `appimage-install` pointing to the new release
 1. Shut down the TemplateVM: `qvm-shutdown <template>`
 2. Sync template appmenus in dom0: `qvm-sync-appmenus <template>`
 3. In any derived AppVM: Open **Qube Settings** → **Applications** tab → **Refresh Applications**, and add the app to the menu.
+
+---
 
 ## Status
 
