@@ -104,15 +104,16 @@ Use when an application should be available across all AppVMs derived from a tem
 ### Key TemplateVM Constraints
 
 - **`/home/user/` is NOT inherited:** AppVMs get private `/rw/home/user/` filesystems. Software
-  intended for AppVMs must live in `/opt/<app>`, `/usr/local/bin/<app>`, and `/usr/share/`.
+  intended for AppVMs must live in `/opt/<app>`, `/usr/bin/<app>`, and `/usr/share/`.
+- **`/usr/bin/` vs. `/usr/local/bin/`:** AppVMs bind-mount `/rw/usrlocal` over `/usr/local`. Any
+  binary in `/usr/local/bin` in a TemplateVM is shadowed and invisible in AppVMs. System wrappers
+  must go in `/usr/bin/`.
 - **Network isolation:** TemplateVMs lack network access by default. Download the AppImage
   in an AppVM and transfer it with `qvm-copy`, avoiding attaching network interfaces to the template.
 - **Permissions:** Root extraction of AppImages creates files readable only by root. Permissions
   must be normalized with `chmod -R a+rX /opt/<app>` so unprivileged AppVM users can execute it.
 
 ### Method A — Automated (`appimage-install --system`)
-
-*(Design proposed, not yet field-tested in a live TemplateVM)*
 
 1. **Transfer AppImage to TemplateVM:**
    `[Agent/qrexec]` or `[Human]` in source AppVM:
@@ -127,17 +128,20 @@ Use when an application should be available across all AppVMs derived from a tem
    ```
    *(To install `appimage-install` in the template, see `vendor/appimage-install/README.md#installing-the-script`).*
 
-3. **Shutdown template and sync in dom0:**
+3. **Sync in dom0 while template is running, then shut down:**
    `[Human/dom0]`:
    ```bash
-   qvm-shutdown <template-name>
    qvm-sync-appmenus <template-name>
+   qvm-shutdown <template-name>
    ```
-   Then in derived AppVMs: **Qube Manager** → **Applications** tab → **Refresh Applications**.
+   *(Note: `qvm-sync-appmenus` communicates via qrexec and requires the qube to be running).*
+
+4. **Restart AppVMs:**
+   `[Human/dom0]`:
+   Restart derived AppVMs so they pick up the updated root volume snapshot. In **Qube Manager**,
+   open **Applications** tab → **Refresh Applications** to pin the new shortcut.
 
 ### Method B — Manual Streamlined Steps
-
-*(Design proposed, not yet field-tested in a live TemplateVM)*
 
 `[Human/TemplateVM]` (run as root in the TemplateVM):
 
@@ -153,11 +157,11 @@ Use when an application should be available across all AppVMs derived from a tem
 
 2. **Create launcher wrapper:**
    ```bash
-   cat > /usr/local/bin/myapp << 'EOF'
+   cat > /usr/bin/myapp << 'EOF'
    #!/bin/bash
    exec /opt/myapp/AppRun "$@"
    EOF
-   chmod a+rx /usr/local/bin/myapp
+   chmod a+rx /usr/bin/myapp
    ```
 
 3. **Install system icons and desktop entry:**
@@ -172,7 +176,7 @@ Use when an application should be available across all AppVMs derived from a tem
    DESKTOP_SRC="$(find /opt/myapp -maxdepth 1 -type f -name "*.desktop" -exec grep -l '^\[Desktop Entry\]' {} + | head -n 1)"
    cp "$DESKTOP_SRC" /usr/share/applications/
    DESKTOP_DEST=/usr/share/applications/"$(basename "$DESKTOP_SRC")"
-   sed -i -E 's|^Exec=[^ ]+|Exec=/usr/local/bin/myapp|' "$DESKTOP_DEST"
+   sed -i -E 's|^Exec=[^ ]+|Exec=/usr/bin/myapp|' "$DESKTOP_DEST"
    chmod 644 "$DESKTOP_DEST"
 
    update-desktop-database /usr/share/applications/
@@ -180,12 +184,13 @@ Use when an application should be available across all AppVMs derived from a tem
    rm -rf ~/QubesIncoming/<source-vm>/
    ```
 
-4. **Shutdown and dom0 sync:**
+4. **Sync in dom0 while template is running, shut down, and restart AppVMs:**
    `[Human/dom0]`:
    ```bash
-   qvm-shutdown <template-name>
    qvm-sync-appmenus <template-name>
+   qvm-shutdown <template-name>
    ```
+   Then restart derived AppVMs and refresh applications in Qube Manager.
 
 ---
 
@@ -203,10 +208,12 @@ Use when an application should be available across all AppVMs derived from a tem
    ```bash
    /usr/lib/qubes/xdg-icon <icon-name> 128
    ```
-   *(Check `Icon=` in the `.desktop` file for `<icon-name>`, e.g. `ai.opencode.desktop`)*.
+   *(Check `Icon=` in the `.desktop` file for `<icon-name>`, e.g. `ai.opencode.desktop` or `obsidian`)*.
 3. **Verify wrapper execution:**
    ```bash
-   test -x ~/.local/bin/myapp && echo "Wrapper is executable"
+   test -x ~/.local/bin/myapp && echo "User wrapper is executable"
+   # Or for TemplateVM:
+   test -x /usr/bin/myapp && echo "System wrapper is executable"
    ```
    *(Note: Avoid running graphical apps directly in non-interactive/agent shell sessions; test interactive launch as a human).*
 
@@ -233,6 +240,13 @@ Debian 13 (Trixie) ships only `libfuse3` by default. Running traditional Type 2 
 directly on Debian 13 fails with `dlopen(): error loading libfuse.so.2`. Extracting once
 completely avoids FUSE requirements and eliminates startup lag.
 
+### Why template binaries must live in `/usr/bin`, not `/usr/local/bin`
+
+In Qubes OS, every AppVM bind-mounts its private volume `/rw/usrlocal` over `/usr/local`
+at boot (`usr-local.mount`). Any binary installed to `/usr/local/bin/` in a TemplateVM is
+shadowed and invisible inside existing AppVMs. System binaries inherited from the template
+must be installed in `/usr/bin/`.
+
 ### Reusing upstream desktop entries vs. hand-crafting
 
 Hand-crafted desktop files invariably miss key metadata:
@@ -245,4 +259,5 @@ Hand-crafted desktop files invariably miss key metadata:
 ## Status
 
 - **AppVM installation (user space):** Confirmed working on `debian-13-xfce` (`id0-agents`).
-- **TemplateVM installation (`--system` mode & manual):** Design proposed, not yet field-tested in a live TemplateVM.
+- **TemplateVM installation (`--system` mode & manual):** Confirmed working on `debian-13-xfce`
+  (verified via Obsidian AppImage install and menu launch across multiple AppVMs).

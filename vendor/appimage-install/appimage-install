@@ -81,7 +81,7 @@ if [ "$MODE" = "system" ]; then
         exit 1
     fi
     APP_DIR="/opt"
-    BIN_DIR="/usr/local/bin"
+    BIN_DIR="/usr/bin"
     DESKTOP_DIR="/usr/share/applications"
     ICON_DIR="/usr/share/icons"
     EXTRACT_DIR="/opt/${APP_NAME}"
@@ -194,11 +194,12 @@ fi
 if [ "$MODE" = "system" ]; then
     echo ""
     echo "Next steps for TemplateVM:"
-    echo "  1. [Human/dom0] Shut down this TemplateVM:"
-    echo "     qvm-shutdown $(qubesdb-read /name 2>/dev/null || echo '<template>')"
-    echo "  2. [Human/dom0] Sync appmenus in dom0:"
+    echo "  1. [Human/dom0] Sync appmenus in dom0 while the TemplateVM is still running:"
     echo "     qvm-sync-appmenus $(qubesdb-read /name 2>/dev/null || echo '<template>')"
-    echo "  3. In derived AppVMs, refresh applications to pin to app menu:"
+    echo "  2. [Human/dom0] Shut down this TemplateVM:"
+    echo "     qvm-shutdown $(qubesdb-read /name 2>/dev/null || echo '<template>')"
+    echo "  3. [Human/dom0] Restart derived AppVMs so they pick up the updated root volume."
+    echo "  4. In derived AppVMs, refresh applications to pin to app menu if needed:"
     echo "     Qube Manager -> <appvm> -> Applications tab -> Refresh Applications"
 else
     echo ""

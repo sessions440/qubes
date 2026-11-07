@@ -22,12 +22,12 @@ Copy the script from an AppVM into the TemplateVM:
    ```
 2. In the TemplateVM (as root):
    ```bash
-   sudo cp ~/QubesIncoming/<source-vm>/appimage-install /usr/local/bin/
-   sudo chmod +x /usr/local/bin/appimage-install
+   sudo cp ~/QubesIncoming/<source-vm>/appimage-install /usr/bin/
+   sudo chmod +x /usr/bin/appimage-install
    rm -rf ~/QubesIncoming/<source-vm>/
    ```
 
-Now `appimage-install` is available system-wide in `/usr/local/bin/` across all derived AppVMs and in the TemplateVM itself.
+Now `appimage-install` is available in `/usr/bin/` across the template and all derived AppVMs.
 
 ---
 
@@ -60,11 +60,14 @@ sudo appimage-install --system ~/QubesIncoming/work/Obsidian-1.5.8.AppImage obsi
 | Component | User Mode (AppVM) | System Mode (`--system`, TemplateVM) |
 |---|---|---|
 | **Payload** | `~/Applications/<app>-extracted/` | `/opt/<app>/` |
-| **Wrapper** | `~/.local/bin/<app>` | `/usr/local/bin/<app>` |
+| **Wrapper** | `~/.local/bin/<app>` | `/usr/bin/<app>` |
 | **Desktop Entry** | `~/.local/share/applications/<id>.desktop` | `/usr/share/applications/<id>.desktop` |
 | **Icons** | `~/.local/share/icons/hicolor/` | `/usr/share/icons/hicolor/` |
 | **Permissions** | User ownership | `chmod -R a+rX` for global read/execute |
 | **Privilege** | Unprivileged (`user`) | Root (`sudo`) |
+
+> **Why `/usr/bin/` instead of `/usr/local/bin/` for TemplateVMs:**
+> In Qubes OS, every AppVM bind-mounts its private volume `/rw/usrlocal` over `/usr/local` at boot (`usr-local.mount`). Any binary placed in `/usr/local/bin/` in a TemplateVM is shadowed and completely invisible inside existing AppVMs. System binaries inherited from the template must live in `/usr/bin/`.
 
 ---
 
@@ -80,7 +83,11 @@ To update an existing app, re-run `appimage-install` pointing to the new release
   ```bash
   sudo appimage-install --system ~/QubesIncoming/<source-vm>/MyApp-1.3.0.AppImage myapp
   ```
-  Then shut down the TemplateVM and sync appmenus in dom0 (`qvm-sync-appmenus <template>`).
+  Then in dom0, sync appmenus while the template is running, shut down the template, and restart derived AppVMs:
+  ```bash
+  qvm-sync-appmenus <template>
+  qvm-shutdown <template>
+  ```
 
 ---
 
@@ -108,16 +115,16 @@ Removal is a straightforward filesystem deletion of the files created during ins
 1. In the TemplateVM (as root):
    ```bash
    sudo rm -rf /opt/<app>
-   sudo rm -f /usr/local/bin/<app>
+   sudo rm -f /usr/bin/<app>
    sudo rm -f /usr/share/applications/<app>*.desktop
    sudo update-desktop-database /usr/share/applications/
    ```
-2. In dom0:
+2. In dom0 (while the template is still running):
    ```bash
-   qvm-shutdown <template>
    qvm-sync-appmenus <template>
+   qvm-shutdown <template>
    ```
-3. In derived AppVMs: Open **Qube Manager** → select the AppVM → **Applications** tab → **Refresh Applications** to remove the app from the menu.
+3. In derived AppVMs: Open **Qube Manager** → select the AppVM → **Applications** tab → **Refresh Applications** to remove the app from the menu, and restart the AppVMs.
 
 ---
 
@@ -129,13 +136,21 @@ Removal is a straightforward filesystem deletion of the files created during ins
 3. Click **Refresh Applications**, select the app, and move it to the right pane.
 
 ### If installed in a TemplateVM:
-1. Shut down the TemplateVM: `qvm-shutdown <template>`
-2. Sync template appmenus in dom0: `qvm-sync-appmenus <template>`
-3. In any derived AppVM: Open **Qube Settings** → **Applications** tab → **Refresh Applications**, and add the app to the menu.
+1. Sync template appmenus in dom0 while the template is still running:
+   ```bash
+   qvm-sync-appmenus <template>
+   ```
+   *(Note: `qvm-sync-appmenus` communicates via qrexec and requires the qube to be running).*
+2. Shut down the TemplateVM:
+   ```bash
+   qvm-shutdown <template>
+   ```
+3. Restart derived AppVMs so they mount the new template root volume snapshot.
+4. In any derived AppVM: Open **Qube Settings** → **Applications** tab → **Refresh Applications**, and add the app to the menu.
 
 ---
 
 ## Status
 
 - **AppVM (user space):** Confirmed working on `debian-13-xfce` (`id0-agents`).
-- **TemplateVM (`--system` mode):** Design proposed, not yet field-tested in a live TemplateVM.
+- **TemplateVM (`--system` mode):** Confirmed working on `debian-13-xfce` (verified via Obsidian AppImage install and menu launch across multiple AppVMs).
