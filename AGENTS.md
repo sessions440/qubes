@@ -9,12 +9,13 @@ and write docs here, and in some cases are given shell access (qrexec, or SSH as
 
 ```
 doc/
-  network/      — ProxyVM/NetVM design and deployment docs
-  apps/         — app install docs: user-space vs. template, etc.
-  agents/       — coding-agent access to qubes (qrexec/SSH setup, root policy)
-tasks/          — specific but unfinished tasks: fixes, buildouts, etc.
-non-qubes-misc/ — miscellaneous learnings, not necessarily Qubes-related
-AGENTS.md       — this file
+  network/           — ProxyVM/NetVM design and deployment docs
+  apps/              — app install docs: user-space vs. template, etc.
+  agents/            — coding-agent access to qubes (qrexec/SSH setup, root policy)
+  troubleshooting.md — problems encountered and resolutions
+tasks/               — specific but unfinished tasks: fixes, buildouts, etc.
+non-qubes-misc/      — miscellaneous learnings, not necessarily Qubes-related
+AGENTS.md            — this file
 ```
 
 ## Conventions
